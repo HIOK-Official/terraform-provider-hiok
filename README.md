@@ -4,36 +4,11 @@ Manage HIOK virtual machines, virtual networks, container instances, and storage
 
 ## Status
 
-The provider is in public preview (`0.1.x`). It has been validated with Terraform 1.15 and Go 1.26. Resource replacement is used where the HIOK API does not yet expose an in-place update operation.
+The provider is in public preview (`0.1.x`) and needs Terraform 1.5 or later. The HIOK API has no in-place update operations yet, so **changing any setting of a resource replaces it**. For a virtual machine that means its disk is deleted too. Read the plan before you apply, and consider `lifecycle { prevent_destroy = true }` on anything that holds data.
 
-## Install from source
+## Install
 
-```bash
-git clone https://github.com/HIOK-Official/terraform-provider-hiok
-cd terraform-provider-hiok
-make install
-```
-
-## Authentication
-
-Use a token (recommended for automation):
-
-```bash
-export HIOK_ENDPOINT="https://hiokcloud.com"
-export HIOK_TOKEN="..."
-```
-
-Or let the provider obtain a token:
-
-```bash
-export HIOK_ENDPOINT="https://hiokcloud.com"
-export HIOK_EMAIL="user@example.com"
-export HIOK_PASSWORD="..."
-```
-
-Never commit credentials to `.tf` files.
-
-## Example
+From the Terraform Registry (once a release is published):
 
 ```hcl
 terraform {
@@ -44,10 +19,40 @@ terraform {
     }
   }
 }
+```
 
+From source (Linux, macOS, Windows; any architecture):
+
+```bash
+git clone https://github.com/HIOK-Official/terraform-provider-hiok
+cd terraform-provider-hiok
+make install
+```
+
+## Authentication
+
+The endpoint is required. Use a token (recommended for automation):
+
+```bash
+export HIOK_ENDPOINT="https://hiokcloud.com"      # or https://test.hiokcloud.com
+export HIOK_TOKEN="..."
+```
+
+Or let the provider sign in (it also re-signs in automatically if the token expires during a long apply):
+
+```bash
+export HIOK_ENDPOINT="https://hiokcloud.com"
+export HIOK_EMAIL="user@example.com"
+export HIOK_PASSWORD="..."
+```
+
+Never commit credentials to `.tf` files. A value set in the `provider` block overrides the environment variable, so leave `endpoint` out of shared configurations.
+
+## Example
+
+```hcl
 provider "hiok" {
-  endpoint = "https://hiokcloud.com"
-  regions  = ["south-india"]
+  regions = ["south-india"]
 }
 
 resource "hiok_virtual_network" "app" {
@@ -65,37 +70,60 @@ resource "hiok_virtual_machine" "web" {
 }
 ```
 
-A complete configuration is in [`examples/main.tf`](examples/main.tf).
+A complete configuration is in [`examples/main.tf`](examples/main.tf). Full reference: [`docs/`](docs/index.md).
 
 ## Resources
 
-- `hiok_virtual_machine`
-- `hiok_virtual_network`
-- `hiok_container`
-- `hiok_storage_account`
+| Resource | Import ID |
+|---|---|
+| `hiok_virtual_machine` | name |
+| `hiok_virtual_network` | name |
+| `hiok_container` | name |
+| `hiok_storage_account` | name |
+
+All resources:
+
+- wait until the API actually lists them after create, and until they are gone after destroy (configurable with a `timeouts` block);
+- refuse to create over an existing name and suggest `terraform import` instead;
+- can be imported without being replaced: settings the API does not report back are recorded on the next apply (shown as an in-place update, no API call).
 
 ## Data sources
 
 - `hiok_regions`
 - `hiok_vm_images`
 - `hiok_virtual_machine`
+- `hiok_virtual_network`
+- `hiok_container`
+- `hiok_storage_account`
 
 ## Development
 
 ```bash
 make fmt
 make vet
-make test
+make test     # real Terraform plan/apply/import/destroy against an in-memory mock API
 make build
 ```
 
-Then run:
+Try the provider without an account:
 
 ```bash
-cd examples
-terraform init -backend=false
-terraform validate
+make install
+make demo                                   # mock API on 127.0.0.1:18080 (leave running)
+export HIOK_ENDPOINT=http://127.0.0.1:18080 HIOK_TOKEN=dev
+cd examples && terraform init && terraform apply && terraform destroy
 ```
+
+Acceptance tests against a real deployment (creates and then destroys real, billable resources named `tf-acc-*`):
+
+```bash
+export HIOK_ENDPOINT=https://test.hiokcloud.com HIOK_EMAIL=... HIOK_PASSWORD=...
+make testacc
+```
+
+## Releasing
+
+Push a `vX.Y.Z` tag. The release workflow builds and signs the artifacts the Terraform Registry expects. It needs the `GPG_PRIVATE_KEY` and `PASSPHRASE` repository secrets, and the matching public key must be added to the Registry namespace.
 
 ## Security
 

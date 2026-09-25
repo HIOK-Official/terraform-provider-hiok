@@ -1,25 +1,57 @@
+# Produces a release the Terraform Registry accepts: per-platform zips, a
+# SHA256SUMS file, its detached GPG signature, and the registry manifest.
 version: 2
+
+before:
+  hooks:
+    - go mod tidy
 
 builds:
   - id: terraform-provider-hiok
-    binary: terraform-provider-hiok_v{{ .Version }}
+    binary: '{{ .ProjectName }}_v{{ .Version }}'
     env:
       - CGO_ENABLED=0
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }}
     goos: [linux, darwin, windows, freebsd]
-    goarch: [amd64, arm64]
+    goarch: [amd64, arm64, '386', arm]
     ignore:
-      - goos: freebsd
-        goarch: arm64
+      - goos: darwin
+        goarch: '386'
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
 
 archives:
   - formats: [zip]
-    name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 
 checksum:
   name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+
+signs:
+  - artifacts: checksum
+    args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
 
 release:
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
   draft: false
   prerelease: auto
 

@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,6 +17,45 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./...
-      - run: go vet ./...
+      - run: go mod tidy && git diff --exit-code -- go.mod go.sum
       - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go build ./...
+
+  # Drives the real Terraform CLI (plan/apply/import/destroy) against the
+  # in-memory mock API, on the oldest and newest supported Terraform.
+  terraform:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform: ['1.5.*', '1.16.*']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ matrix.terraform }}
+          terraform_wrapper: false
+      - run: go test -v -count=1 ./...
+        timeout-minutes: 10
+
+  examples:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - run: make install
+      - run: terraform fmt -check -recursive examples
+      - run: cd examples && terraform init -backend=false && terraform validate

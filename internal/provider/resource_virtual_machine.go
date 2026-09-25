@@ -2,81 +2,91 @@ package provider
 
 import (
 	"context"
-	"fmt"
-	"strings"
+	"net/http"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 
 	"github.com/HIOK-Official/terraform-provider-hiok/internal/client"
 )
 
 func resourceVirtualMachine() *schema.Resource {
 	return &schema.Resource{
-		Description:   "A KVM virtual machine.",
+		Description: "A KVM virtual machine. The HIOK API has no in-place update for virtual machines, " +
+			"so changing any setting other than `timeouts` destroys the VM (including its disk) and creates a new one.",
 		CreateContext: vmCreate,
 		ReadContext:   vmRead,
+		UpdateContext: recordOnly(vmRead),
 		DeleteContext: vmDelete,
-		Importer:      &schema.ResourceImporter{StateContext: schema.ImportStatePassthroughContext},
+		Importer:      &schema.ResourceImporter{StateContext: importState},
+		CustomizeDiff: createTimeOnly("image", "vcpu_count", "ram_gb", "network_name", "username", "ssh_public_key", "generate_ssh_key"),
+
+		Timeouts: &schema.ResourceTimeout{
+			Create: schema.DefaultTimeout(20 * time.Minute),
+			Delete: schema.DefaultTimeout(15 * time.Minute),
+		},
 
 		Schema: map[string]*schema.Schema{
 			"name": {
-				Type:        schema.TypeString,
-				Required:    true,
-				ForceNew:    true,
-				Description: "Virtual machine name; unique within the account.",
+				Type:         schema.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validateName,
+				Description:  "Virtual machine name; unique within the account.",
 			},
 			"region": {
 				Type:        schema.TypeString,
 				Optional:    true,
+				Computed:    true,
 				ForceNew:    true,
 				Description: "Region to deploy into. Defaults to the provider's first region.",
 			},
 			"image": {
-				Type:        schema.TypeString,
-				Optional:    true,
-				ForceNew:    true,
-				Default:     "ubuntu-24.04",
-				Description: "Base image id, as reported by the hiok_vm_images data source.",
+				Type:         schema.TypeString,
+				Optional:     true,
+				Default:      "ubuntu-24.04",
+				ValidateFunc: validation.StringIsNotWhiteSpace,
+				Description:  "Base image, sent to the API as `sourceFilePath`.",
 			},
 			"vcpu_count": {
-				Type:        schema.TypeInt,
-				Optional:    true,
-				ForceNew:    true,
-				Default:     1,
-				Description: "Virtual CPUs.",
+				Type:         schema.TypeInt,
+				Optional:     true,
+				Default:      1,
+				ValidateFunc: validation.IntBetween(1, 128),
+				Description:  "Virtual CPUs.",
 			},
 			"ram_gb": {
-				Type:        schema.TypeFloat,
-				Optional:    true,
-				ForceNew:    true,
-				Default:     1,
-				Description: "Memory in GiB.",
+				Type:         schema.TypeFloat,
+				Optional:     true,
+				Default:      1.0,
+				ValidateFunc: validation.FloatBetween(0.5, 1024),
+				Description:  "Memory in GiB.",
 			},
 			"network_name": {
-				Type:        schema.TypeString,
-				Optional:    true,
-				ForceNew:    true,
-				Default:     "default",
-				Description: "libvirt network or OVS bridge to attach to.",
+				Type:         schema.TypeString,
+				Optional:     true,
+				Default:      "default",
+				ValidateFunc: validation.StringIsNotWhiteSpace,
+				Description:  "Virtual network (libvirt network or OVS bridge) to attach to.",
 			},
 			"username": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				ForceNew:    true,
 				Description: "cloud-init user created on first boot.",
 			},
 			"ssh_public_key": {
-				Type:        schema.TypeString,
-				Optional:    true,
-				ForceNew:    true,
-				Description: "Public key authorised for the cloud-init user.",
+				Type:          schema.TypeString,
+				Optional:      true,
+				ConflictsWith: []string{"generate_ssh_key"},
+				Description:   "Public key authorised for the cloud-init user.",
 			},
 			"generate_ssh_key": {
-				Type:        schema.TypeBool,
-				Optional:    true,
-				ForceNew:    true,
-				Description: "Have the platform generate a keypair; fetch the private key from the console.",
+				Type:          schema.TypeBool,
+				Optional:      true,
+				ConflictsWith: []string{"ssh_public_key"},
+				Description:   "Have the platform generate a keypair; download the private key from the HIOK console.",
 			},
 			"status": {
 				Type:        schema.TypeString,
@@ -88,23 +98,52 @@ func resourceVirtualMachine() *schema.Resource {
 				Computed:    true,
 				Description: "Address on the attached network.",
 			},
+			"imported": importedSchema(),
 		},
 	}
 }
 
-func vmRegions(d *schema.ResourceData, c *client.Client) []string {
-	if r, ok := d.GetOk("region"); ok && r.(string) != "" {
-		return []string{r.(string)}
+type vmInfo struct {
+	VMName    string `json:"vmName"`
+	Status    string `json:"status"`
+	RegionId  string `json:"regionId"`
+	PrivateIp string `json:"privateIp"`
+}
+
+func findVM(ctx context.Context, c *client.Client, name string) (*vmInfo, error) {
+	var resp struct {
+		Data []vmInfo `json:"data"`
 	}
-	return c.Regions
+	if err := c.Do(ctx, http.MethodGet, "/api/VirtualMachine/list-vms-info", nil, &resp); err != nil {
+		return nil, err
+	}
+	for i := range resp.Data {
+		// Names are stored scoped ("<owner>#<name>"); compare on the visible part.
+		if client.VisibleName(resp.Data[i].VMName) == name {
+			return &resp.Data[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func vmExists(ctx context.Context, c *client.Client, name string) (bool, error) {
+	vm, err := findVM(ctx, c, name)
+	return vm != nil, err
 }
 
 func vmCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
 	c := meta.(*client.Client)
+	name := d.Get("name").(string)
+
+	if existing, err := findVM(ctx, c, name); err != nil {
+		return diag.FromErr(err)
+	} else if existing != nil {
+		return diag.Errorf("a virtual machine named %q already exists; import it with: terraform import <address> %s", name, name)
+	}
 
 	payload := map[string]any{
-		"vmName":         d.Get("name").(string),
-		"regions":        vmRegions(d, c),
+		"vmName":         name,
+		"regions":        regionsFor(d, c),
 		"sourceFilePath": d.Get("image").(string),
 		"vcpuCount":      d.Get("vcpu_count").(int),
 		"ramSize":        d.Get("ram_gb").(float64),
@@ -122,56 +161,50 @@ func vmCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagno
 		payload["authType"] = "ssh"
 	}
 
-	if err := c.Do("POST", "/api/VirtualMachine/create-vm", payload, nil); err != nil {
+	if err := c.Do(ctx, http.MethodPost, "/api/VirtualMachine/create-vm", payload, nil); err != nil {
 		return diag.FromErr(err)
 	}
+	// Record the ID before waiting so a timeout still leaves the VM tracked
+	// (Terraform marks it tainted) instead of orphaning it.
+	d.SetId(name)
+	_ = d.Set("imported", false)
 
-	d.SetId(d.Get("name").(string))
+	if err := waitForPresence(ctx, c, name, vmExists, true, d.Timeout(schema.TimeoutCreate)); err != nil {
+		return diag.FromErr(err)
+	}
 	return vmRead(ctx, d, meta)
 }
 
-func vmRead(_ context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func vmRead(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
 	c := meta.(*client.Client)
 
-	var resp struct {
-		Data []struct {
-			VMName    string `json:"vmName"`
-			Status    string `json:"status"`
-			RegionId  string `json:"regionId"`
-			PrivateIp string `json:"privateIp"`
-		} `json:"data"`
-	}
-	if err := c.Do("GET", "/api/VirtualMachine/list-vms-info", nil, &resp); err != nil {
+	vm, err := findVM(ctx, c, d.Id())
+	if err != nil {
 		return diag.FromErr(err)
 	}
-
-	want := d.Id()
-	for _, vm := range resp.Data {
-		// Names are stored scoped ("<owner>#<name>"); compare on the visible part.
-		name := vm.VMName
-		if i := strings.LastIndex(name, "#"); i >= 0 {
-			name = name[i+1:]
-		}
-		if name == want {
-			_ = d.Set("name", name)
-			_ = d.Set("status", vm.Status)
-			_ = d.Set("private_ip", vm.PrivateIp)
-			if vm.RegionId != "" {
-				_ = d.Set("region", vm.RegionId)
-			}
-			return nil
-		}
+	if vm == nil {
+		// Gone outside Terraform: drop it from state rather than failing the plan.
+		d.SetId("")
+		return nil
 	}
-
-	// Gone outside Terraform: drop it from state rather than failing the plan.
-	d.SetId("")
+	_ = d.Set("name", d.Id())
+	_ = d.Set("status", vm.Status)
+	_ = d.Set("private_ip", vm.PrivateIp)
+	if vm.RegionId != "" {
+		_ = d.Set("region", vm.RegionId)
+	}
 	return nil
 }
 
-func vmDelete(_ context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+func vmDelete(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
 	c := meta.(*client.Client)
-	path := fmt.Sprintf("/api/VirtualMachine/destroy-vm?vmName=%s", d.Id())
-	if err := c.Do("DELETE", path, nil, nil); err != nil {
+	name := d.Id()
+
+	err := c.Do(ctx, http.MethodDelete, "/api/VirtualMachine/destroy-vm"+client.Query("vmName", name), nil, nil)
+	if err != nil && !client.IsNotFound(err) {
+		return diag.FromErr(err)
+	}
+	if err := waitForPresence(ctx, c, name, vmExists, false, d.Timeout(schema.TimeoutDelete)); err != nil {
 		return diag.FromErr(err)
 	}
 	d.SetId("")

@@ -1,4 +1,5 @@
 terraform {
+  required_version = ">= 1.5"
   required_providers {
     hiok = {
       source  = "HIOK-Official/hiok"
@@ -7,43 +8,58 @@ terraform {
   }
 }
 
-# Credentials come from HIOK_ENDPOINT / HIOK_EMAIL / HIOK_PASSWORD (or HIOK_TOKEN)
-# so nothing sensitive has to live in the configuration.
+# Endpoint and credentials come from the environment so nothing sensitive
+# (and no environment-specific URL) lives in the configuration:
+#   export HIOK_ENDPOINT="https://test.hiokcloud.com"
+#   export HIOK_EMAIL="you@example.com" HIOK_PASSWORD="..."   # or HIOK_TOKEN
 provider "hiok" {
-  endpoint = "https://hiokcloud.com"
-  regions  = ["south-india"]
+  regions = [var.region]
+}
+
+variable "region" {
+  type    = string
+  default = "south-india"
+}
+
+variable "prefix" {
+  type        = string
+  default     = "demo"
+  description = "Prefix for every resource name, so several people can share one account."
 }
 
 data "hiok_regions" "available" {}
 
-data "hiok_vm_images" "ubuntu" {}
+data "hiok_vm_images" "available" {}
 
 resource "hiok_virtual_network" "app" {
-  name          = "app-net"
+  name          = "${var.prefix}-app-net"
   address_space = "10.20.0.0/16"
   subnet_name   = "web"
   subnet_cidr   = "10.20.1.0/24"
 }
 
 resource "hiok_virtual_machine" "web" {
-  name             = "web-01"
-  region           = "south-india"
+  name             = "${var.prefix}-web-01"
   image            = "ubuntu-24.04"
   vcpu_count       = 2
   ram_gb           = 4
   network_name     = hiok_virtual_network.app.name
   username         = "ubuntu"
   generate_ssh_key = true
+
+  timeouts {
+    create = "30m"
+  }
 }
 
 resource "hiok_container" "api" {
-  name  = "api-01"
+  name  = "${var.prefix}-api-01"
   image = "nginx:alpine"
   env   = ["NODE_ENV=production"]
 }
 
 resource "hiok_storage_account" "assets" {
-  name       = "assets"
+  name       = "${var.prefix}assets"
   tier       = "standard"
   redundancy = "lrs"
 }
@@ -52,6 +68,14 @@ output "vm_private_ip" {
   value = hiok_virtual_machine.web.private_ip
 }
 
+output "vm_status" {
+  value = hiok_virtual_machine.web.status
+}
+
 output "regions" {
   value = data.hiok_regions.available.ids
+}
+
+output "images" {
+  value = data.hiok_vm_images.available.names
 }
