@@ -7,6 +7,7 @@ resource "hiok_virtual_machine" "example" {
   network_name     = "app-net"
   username         = "ubuntu"
   generate_ssh_key = true
+  power_state      = "running"
 
   timeouts {
     create = "30m"

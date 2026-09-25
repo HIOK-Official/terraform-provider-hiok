@@ -22,6 +22,7 @@ resource "hiok_virtual_machine" "example" {
   network_name     = "app-net"
   username         = "ubuntu"
   generate_ssh_key = true
+  power_state      = "running"
 
   timeouts {
     create = "30m"
@@ -40,10 +41,11 @@ resource "hiok_virtual_machine" "example" {
 ### Optional
 
 - `disk_size_gb` (Number) Root disk size in GiB. Defaults to the platform's size for the image.
-- `generate_ssh_key` (Boolean) Have the platform generate a keypair; download the private key from the HIOK console.
+- `generate_ssh_key` (Boolean) Generate an ed25519 keypair for the cloud-init user. The private key is returned in `private_key_openssh` (stored in Terraform state, so protect your state).
 - `image` (String) Base image ID, as listed in `hiok_vm_images.ids` (e.g. `ubuntu-24.04-amd64`, `debian-12-amd64`).
 - `network_name` (String) Virtual network to attach to, usually a `hiok_virtual_network` name.
 - `password` (String, Sensitive) Password for the cloud-init user (password authentication). Prefer SSH keys.
+- `power_state` (String) Desired power state, `running` or `stopped`. Changed in place (start/stop), without replacing the VM.
 - `ram_gb` (Number) Memory in GiB.
 - `region` (String) Region to deploy into, e.g. `canada`. Defaults to the provider's region.
 - `ssh_public_key` (String) Public key authorised for the cloud-init user.
@@ -56,7 +58,11 @@ resource "hiok_virtual_machine" "example" {
 - `hostname` (String) Public DNS name assigned at creation, e.g. `web-01-canada-1a2b3c.hiokcloud.com`. Not known for imported VMs.
 - `id` (String) The ID of this resource.
 - `imported` (Boolean) True when the resource was adopted with `terraform import` and its create-time settings have not been recorded yet. The next apply records them without calling the API.
-- `private_ip` (String) Address on the attached network, when the API reports one (the current API does not).
+- `private_ip` (String) Address on the attached network, e.g. `10.20.0.2`.
+- `private_key_openssh` (String, Sensitive) OpenSSH private key generated when `generate_ssh_key` is true. Save it with `terraform output -raw`.
+- `public_ip` (String) First public address attached to the VM, if any.
+- `public_key_openssh` (String) Public half of the generated key, in authorized_keys format.
+- `ssh_command` (String) Command the platform suggests for connecting, e.g. `ssh -p 22000 ubuntu@web-01-canada-1a2b3c.hiokcloud.com`.
 - `status` (String) Current power state, e.g. `running`.
 - `vm_id` (String) Platform ID of the virtual machine.
 

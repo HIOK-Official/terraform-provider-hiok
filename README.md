@@ -4,7 +4,9 @@ Manage HIOK virtual machines, virtual networks, container instances, and storage
 
 ## Status
 
-The provider is in public preview (`0.1.x`) and needs Terraform 1.5 or later. The HIOK API has no in-place update operations yet, so **changing any setting of a resource replaces it**. For a virtual machine that means its disk is deleted too. Read the plan before you apply, and consider `lifecycle { prevent_destroy = true }` on anything that holds data.
+The provider is in public preview (`0.1.x`) and needs Terraform 1.5 or later. It is tested end to end against the live HIOK test deployment.
+
+Changed in place (no replacement): a VM's `power_state`, a storage account's `tier`, `redundancy` and `display_name`, and a network's `subnet_name`/`subnet_cidr`. The HIOK API has no update operation for anything else, so **changing any other setting replaces the resource**. For a virtual machine that means its disk is deleted too. Read the plan before you apply, and consider `lifecycle { prevent_destroy = true }` on anything that holds data.
 
 ## Install
 
@@ -91,7 +93,10 @@ All resources:
 
 - wait until the API actually lists them after create, and until they are gone after destroy (configurable with a `timeouts` block);
 - refuse to create over an existing name and suggest `terraform import` instead;
-- can be imported without being replaced: settings the API does not report back are recorded on the next apply (shown as an in-place update, no API call).
+- can be imported without being replaced: settings the API does not report back are recorded on the next apply (shown as an in-place update, no API call);
+- ride out short API outages (retries, and waits that keep polling through 502/503/504/52x responses).
+
+Virtual machines also expose `private_ip`, `public_ip`, `hostname` and `ssh_command`. With `generate_ssh_key = true` the provider generates an ed25519 keypair itself (the platform's own key generation does not keep a retrievable key) and returns the private key in the sensitive `private_key_openssh` attribute, which is stored in Terraform state. Protect your state accordingly, or pass your own `ssh_public_key`.
 
 ## Data sources
 

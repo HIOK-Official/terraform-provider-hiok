@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -34,7 +35,8 @@ func TestAccLive(t *testing.T) {
 	suffix := acctest.RandStringFromCharSet(6, "abcdefghijklmnopqrstuvwxyz0123456789")
 	vnet, vm, ct, sa := "tf-acc-net-"+suffix, "tf-acc-vm-"+suffix, "tf-acc-ct-"+suffix, "tfacc"+suffix
 
-	config := fmt.Sprintf(`
+	configFor := func(power, tier, subnetCIDR string) string {
+		return fmt.Sprintf(`
 provider "hiok" {
   regions = [%[1]q]
 }
@@ -45,7 +47,7 @@ resource "hiok_virtual_network" "t" {
   name          = %[3]q
   address_space = "10.231.0.0/16"
   subnet_name   = "default"
-  subnet_cidr   = "10.231.1.0/24"
+  subnet_cidr   = %[9]q
 }
 resource "hiok_virtual_machine" "t" {
   name             = %[4]q
@@ -56,6 +58,7 @@ resource "hiok_virtual_machine" "t" {
   network_name     = hiok_virtual_network.t.name
   username         = "ubuntu"
   generate_ssh_key = true
+  power_state      = %[7]q
 }
 resource "hiok_container" "t" {
   name  = %[5]q
@@ -64,8 +67,12 @@ resource "hiok_container" "t" {
 }
 resource "hiok_storage_account" "t" {
   name = %[6]q
+  tier = %[8]q
 }
-`, region, image, vnet, vm, ct, sa)
+`, region, image, vnet, vm, ct, sa, power, tier, subnetCIDR)
+	}
+	config := configFor("running", "hot", "10.231.1.0/24")
+	changed := configFor("stopped", "cool", "10.231.4.0/22")
 
 	var c *client.Client
 	gone := func(*terraform.State) error {
@@ -100,6 +107,9 @@ resource "hiok_storage_account" "t" {
 					resource.TestCheckResourceAttr("hiok_virtual_machine.t", "region", region),
 					resource.TestCheckResourceAttrSet("hiok_virtual_machine.t", "vm_id"),
 					resource.TestCheckResourceAttrSet("hiok_virtual_machine.t", "hostname"),
+					resource.TestMatchResourceAttr("hiok_virtual_machine.t", "private_ip", regexp.MustCompile(`^10\.231\.`)),
+					resource.TestCheckResourceAttrSet("hiok_virtual_machine.t", "ssh_command"),
+					resource.TestMatchResourceAttr("hiok_virtual_machine.t", "private_key_openssh", regexp.MustCompile(`BEGIN OPENSSH PRIVATE KEY`)),
 					resource.TestCheckResourceAttrSet("hiok_virtual_network.t", "vnet_id"),
 					resource.TestCheckResourceAttrSet("hiok_container.t", "dns_hostname"),
 					resource.TestCheckResourceAttrSet("hiok_storage_account.t", "account_id"),
@@ -113,8 +123,25 @@ resource "hiok_storage_account" "t" {
 				Config:           config,
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
 			},
+			// Power, storage tier and subnet change in place, without replacement.
+			{
+				Config: changed,
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("hiok_virtual_machine.t", plancheck.ResourceActionUpdate),
+					plancheck.ExpectResourceAction("hiok_storage_account.t", plancheck.ResourceActionUpdate),
+					plancheck.ExpectResourceAction("hiok_virtual_network.t", plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("hiok_virtual_machine.t", "power_state", "stopped"),
+					resource.TestCheckResourceAttr("hiok_storage_account.t", "tier", "cool"),
+				),
+			},
+			{
+				Config: config,
+				Check:  resource.TestCheckResourceAttr("hiok_virtual_machine.t", "power_state", "running"),
+			},
 			{ResourceName: "hiok_virtual_machine.t", ImportState: true, ImportStateVerify: true,
-				ImportStateVerifyIgnore: []string{"image", "vcpu_count", "ram_gb", "disk_size_gb", "network_name", "username", "generate_ssh_key", "hostname", "imported"}},
+				ImportStateVerifyIgnore: []string{"image", "vcpu_count", "ram_gb", "disk_size_gb", "network_name", "username", "generate_ssh_key", "private_key_openssh", "public_key_openssh", "imported"}},
 			{ResourceName: "hiok_virtual_network.t", ImportState: true, ImportStateVerify: true,
 				ImportStateVerifyIgnore: []string{"address_space", "subnet_name", "subnet_cidr", "imported"}},
 			{ResourceName: "hiok_container.t", ImportState: true, ImportStateVerify: true,

@@ -29,10 +29,10 @@ resource "hiok_storage_account" "example" {
 
 ### Optional
 
-- `display_name` (String) Friendly name shown in the console. Defaults to `name`.
-- `redundancy` (String) Redundancy: `LRS`, `ZRS`, `GRS` or `RA-GRS`.
+- `display_name` (String) Friendly name shown in the console. Defaults to `name`. Changed in place.
+- `redundancy` (String) Redundancy: `LRS`, `ZRS`, `GRS` or `RA-GRS`. Changed in place.
 - `region` (String) Primary region, e.g. `canada`. Defaults to the provider's region.
-- `tier` (String) Access tier: `hot`, `cool`, `cold` or `archive`.
+- `tier` (String) Access tier: `hot`, `cool`, `cold` or `archive`. Changed in place.
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
 
 ### Read-Only

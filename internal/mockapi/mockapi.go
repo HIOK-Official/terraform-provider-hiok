@@ -28,6 +28,9 @@ type Options struct {
 	ExpireTokenAfter int
 	// Transient503 answers 503 to the first N GET calls.
 	Transient503 int
+	// OutageAfterStop answers 502 to the next N requests (sign-in included)
+	// after a stop-vm, as the live platform did.
+	OutageAfterStop int
 }
 
 type item struct {
@@ -45,6 +48,7 @@ type Server struct {
 	store   map[string]map[string]*item // kind -> name -> item
 	subnets map[string][]map[string]any // vnet id -> subnets
 	calls   int
+	outage  int
 	seq     int
 	log     []string
 	token   int
@@ -142,6 +146,12 @@ func (s *Server) Handler() http.Handler {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.log = append(s.log, strings.TrimSpace(r.Method+" "+r.URL.RequestURI()+" "+string(raw)))
+		if s.outage > 0 {
+			s.outage--
+			w.WriteHeader(502)
+			_, _ = io.WriteString(w, "Error 502: Bad gateway")
+			return
+		}
 
 		if r.URL.Path == "/api/OAuth/token" {
 			var p struct{ Email, Password string }
@@ -199,6 +209,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, raw []byte) {
 			SourceFilePath string   `json:"sourceFilePath"`
 			VCPUCount      int      `json:"vcpuCount"`
 			RAMSize        float64  `json:"ramSize"`
+			Username       string   `json:"username"`
+			SSHPublicKey   string   `json:"sshPublicKey"`
 		}
 		_ = json.Unmarshal(raw, &in)
 		region := first(in.Regions)
@@ -223,15 +235,48 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, raw []byte) {
 			return
 		}
 		it := &item{ID: s.newID(), Name: in.VMName, hidden: s.opt.HiddenReads, deleting: -1,
-			Fields: map[string]any{"state": "running", "vCpu": in.VCPUCount, "memory": int(in.RAMSize * 1792), "regionId": region}}
+			Fields: map[string]any{"state": "running", "vCpu": in.VCPUCount, "memory": int(in.RAMSize * 1792), "regionId": region,
+				"username": in.Username, "sshPublicKey": in.SSHPublicKey}}
 		s.store["vm"][in.VMName] = it
 		hostname := fmt.Sprintf("%s-%s-%06x.hiokcloud.com", in.VMName, region, s.seq)
+		it.Fields["hostname"] = hostname
 		writeJSON(w, 202, map[string]any{"message": "Virtual Machine Deployment Started.",
 			"data": map[string]any{"isSuccess": true, "data": "Virtual Machine created successfully", "hostname": hostname, "sshPrivateKey": "", "sshPublicKey": ""}})
 	case p == "/api/VirtualMachine/list-vms-info" && r.Method == http.MethodGet:
 		s.list(w, "vm", "Virtual Machine Listed Successfully.", func(it *item) map[string]any {
-			return merge(it.Fields, map[string]any{"name": it.Name, "id": it.ID})
+			return map[string]any{"name": it.Name, "id": it.ID, "state": it.Fields["state"], "vCpu": it.Fields["vCpu"],
+				"memory": it.Fields["memory"], "regionId": it.Fields["regionId"]}
 		})
+	case (p == "/api/VirtualMachine/start-vm" || p == "/api/VirtualMachine/stop-vm") && r.Method == http.MethodPost:
+		var in struct {
+			VMName string `json:"vmName"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		it := s.store["vm"][in.VMName]
+		if it == nil {
+			writeJSON(w, 400, map[string]any{"message": "Failed Starting Virtual Machine."})
+			return
+		}
+		if strings.HasSuffix(p, "stop-vm") {
+			it.Fields["state"] = "shutoff"
+			s.outage = s.opt.OutageAfterStop
+			writeJSON(w, 200, map[string]any{"message": "Virtual Machine Stopped Successfully."})
+		} else {
+			it.Fields["state"] = "running"
+			writeJSON(w, 200, map[string]any{"message": "Virtual Machine Started Successfully."})
+		}
+	case strings.HasPrefix(p, "/api/VirtualMachine/") && strings.HasSuffix(p, "/connect") && r.Method == http.MethodGet:
+		name := strings.TrimSuffix(strings.TrimPrefix(p, "/api/VirtualMachine/"), "/connect")
+		it := s.store["vm"][name]
+		if it == nil || it.hidden > 0 {
+			writeJSON(w, 404, map[string]any{"message": "Virtual machine not found"})
+			return
+		}
+		ip := fmt.Sprintf("10.20.0.%d", 2+len(it.ID)%200)
+		writeJSON(w, 200, map[string]any{"message": "Connection info", "data": map[string]any{
+			"vmName": name, "status": it.Fields["state"], "region": it.Fields["regionId"], "username": firstNonEmpty(str(it.Fields["username"]), "hiokuser"),
+			"authenticationType": "ssh", "privateIp": ip, "publicIps": []any{}, "hostname": str(it.Fields["hostname"]),
+			"sshCommand": "ssh " + firstNonEmpty(str(it.Fields["username"]), "hiokuser") + "@" + ip}})
 	case p == "/api/VirtualMachine/destroy-vm" && r.Method == http.MethodDelete:
 		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 			writeJSON(w, 415, map[string]any{"title": "Unsupported Media Type", "status": 415})
@@ -373,6 +418,22 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, raw []byte) {
 		s.list(w, "sa", "Storage accounts retrieved successfully", func(it *item) map[string]any {
 			return merge(it.Fields, map[string]any{"name": it.Name, "id": it.ID})
 		})
+	case strings.HasPrefix(p, "/api/StorageAccount/") && r.Method == http.MethodPut:
+		id := strings.TrimPrefix(p, "/api/StorageAccount/")
+		var in struct {
+			DisplayName string `json:"displayName"`
+			StorageTier string `json:"storageTier"`
+			Redundancy  string `json:"redundancy"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		for _, it := range s.store["sa"] {
+			if it.ID == id {
+				it.Fields["displayName"], it.Fields["storageTier"], it.Fields["redundancy"] = in.DisplayName, in.StorageTier, in.Redundancy
+				writeJSON(w, 200, map[string]any{"message": "Storage account updated successfully", "data": merge(it.Fields, map[string]any{"id": it.ID, "name": it.Name})})
+				return
+			}
+		}
+		writeJSON(w, 404, map[string]any{"message": "Storage account not found"})
 	case strings.HasPrefix(p, "/api/StorageAccount/") && r.Method == http.MethodDelete:
 		id := strings.TrimPrefix(p, "/api/StorageAccount/")
 		if !isUUID(id) {

@@ -20,10 +20,10 @@ func resourceVirtualNetwork() *schema.Resource {
 		Description:   "An isolated virtual network (OVS bridge, optionally VXLAN-backed). Changing any setting other than `timeouts` replaces the network.",
 		CreateContext: vnetCreate,
 		ReadContext:   vnetRead,
-		UpdateContext: recordOnly(vnetRead),
+		UpdateContext: vnetUpdate,
 		DeleteContext: vnetDelete,
 		Importer:      &schema.ResourceImporter{StateContext: importState},
-		CustomizeDiff: createTimeOnly("address_space", "region", "subnet_name", "subnet_cidr"),
+		CustomizeDiff: createTimeOnly("address_space", "region"),
 
 		Timeouts: &schema.ResourceTimeout{
 			Create: schema.DefaultTimeout(10 * time.Minute),
@@ -35,9 +35,9 @@ func resourceVirtualNetwork() *schema.Resource {
 			"address_space": {Type: schema.TypeString, Required: true, ValidateFunc: validation.IsCIDR, Description: "IPv4 CIDR block, e.g. 10.10.0.0/16."},
 			"region":        {Type: schema.TypeString, Optional: true, Computed: true, Description: "Region to create the network in, e.g. `canada`. Defaults to the provider's region."},
 			"subnet_name": {Type: schema.TypeString, Optional: true, RequiredWith: []string{"subnet_cidr"},
-				Description: "Name of the network's subnet. Without it the platform creates a subnet named `default` spanning the whole address space."},
+				Description: "Name of the network's subnet. Without it the platform creates a subnet named `default` spanning the whole address space. Changed in place."},
 			"subnet_cidr": {Type: schema.TypeString, Optional: true, RequiredWith: []string{"subnet_name"}, ValidateFunc: validation.IsCIDR,
-				Description: "IPv4 CIDR of the subnet; must sit inside address_space."},
+				Description: "IPv4 CIDR of the subnet; must sit inside address_space. Changed in place."},
 			"vnet_id":  {Type: schema.TypeString, Computed: true, Description: "Platform ID of the network."},
 			"status":   {Type: schema.TypeString, Computed: true, Description: "Provisioning state, e.g. `Available`."},
 			"imported": importedSchema(),
@@ -178,6 +178,22 @@ func vnetCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diag
 	return vnetRead(ctx, d, meta)
 }
 
+func vnetUpdate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+	c := meta.(*client.Client)
+	if d.HasChanges("subnet_name", "subnet_cidr") && !d.Get("imported").(bool) {
+		name, cidr := d.Get("subnet_name").(string), d.Get("subnet_cidr").(string)
+		if name != "" && cidr != "" {
+			if err := cidrWithin(cidr, d.Get("address_space").(string)); err != nil {
+				return diag.FromErr(err)
+			}
+			if err := configureSubnet(ctx, c, d.Get("vnet_id").(string), d.Get("address_space").(string), name, cidr); err != nil {
+				return diag.FromErr(err)
+			}
+		}
+	}
+	return recordOnly(vnetRead)(ctx, d, meta)
+}
+
 func vnetRead(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
 	c := meta.(*client.Client)
 	v, err := findVnet(ctx, c, d.Id())
@@ -233,10 +249,10 @@ func resourceStorageAccount() *schema.Resource {
 		Description:   "A storage account. Changing any setting other than `timeouts` replaces the account and its data.",
 		CreateContext: storageCreate,
 		ReadContext:   storageRead,
-		UpdateContext: recordOnly(storageRead),
+		UpdateContext: storageUpdate,
 		DeleteContext: storageDelete,
 		Importer:      &schema.ResourceImporter{StateContext: importState},
-		CustomizeDiff: createTimeOnly("region", "tier", "redundancy", "display_name"),
+		CustomizeDiff: createTimeOnly("region"),
 
 		Timeouts: &schema.ResourceTimeout{
 			Create: schema.DefaultTimeout(10 * time.Minute),
@@ -245,15 +261,15 @@ func resourceStorageAccount() *schema.Resource {
 
 		Schema: map[string]*schema.Schema{
 			"name":         {Type: schema.TypeString, Required: true, ForceNew: true, ValidateFunc: validateName, Description: "Storage account name."},
-			"display_name": {Type: schema.TypeString, Optional: true, Description: "Friendly name shown in the console. Defaults to `name`."},
+			"display_name": {Type: schema.TypeString, Optional: true, Computed: true, Description: "Friendly name shown in the console. Defaults to `name`. Changed in place."},
 			"region":       {Type: schema.TypeString, Optional: true, Computed: true, Description: "Primary region, e.g. `canada`. Defaults to the provider's region."},
 			"tier": {Type: schema.TypeString, Optional: true, Default: "hot",
 				ValidateFunc: validation.StringInSlice(storageTiers, false),
-				Description:  "Access tier: `hot`, `cool`, `cold` or `archive`."},
+				Description:  "Access tier: `hot`, `cool`, `cold` or `archive`. Changed in place."},
 			"redundancy": {Type: schema.TypeString, Optional: true, Default: "LRS",
 				ValidateFunc:     validation.StringInSlice(storageRedundancy, true),
 				DiffSuppressFunc: func(_, o, n string, _ *schema.ResourceData) bool { return strings.EqualFold(o, n) },
-				Description:      "Redundancy: `LRS`, `ZRS`, `GRS` or `RA-GRS`."},
+				Description:      "Redundancy: `LRS`, `ZRS`, `GRS` or `RA-GRS`. Changed in place."},
 			"account_id":       {Type: schema.TypeString, Computed: true, Description: "Platform ID of the account (used by the API for most operations)."},
 			"primary_endpoint": {Type: schema.TypeString, Computed: true, Description: "API endpoint of the account."},
 			"quota_bytes":      {Type: schema.TypeInt, Computed: true, Description: "Storage quota in bytes."},
@@ -309,22 +325,7 @@ func storageCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.D
 		return diag.Errorf("a storage account named %q already exists; import it with: terraform import <address> %s", name, name)
 	}
 
-	displayName := name
-	if v, ok := d.GetOk("display_name"); ok {
-		displayName = v.(string)
-	}
-	payload := map[string]any{
-		"name":                 name,
-		"displayName":          displayName,
-		"primaryRegion":        region,
-		"preferredReadRegion":  region,
-		"replicaRegions":       []string{},
-		"storageTier":          d.Get("tier").(string),
-		"redundancy":           strings.ToUpper(d.Get("redundancy").(string)),
-		"consistencyMode":      "session",
-		"writeAcknowledgement": "quorum",
-	}
-	if err := c.Do(ctx, http.MethodPost, "/api/StorageAccount", payload, nil); err != nil {
+	if err := c.Do(ctx, http.MethodPost, "/api/StorageAccount", storagePayload(d, name, region), nil); err != nil {
 		return diag.FromErr(err)
 	}
 	d.SetId(name)
@@ -335,6 +336,44 @@ func storageCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.D
 		return diag.FromErr(err)
 	}
 	return storageRead(ctx, d, meta)
+}
+
+func storagePayload(d *schema.ResourceData, name, region string) map[string]any {
+	displayName := name
+	if v, ok := d.GetOk("display_name"); ok {
+		displayName = v.(string)
+	}
+	return map[string]any{
+		"name":                 name,
+		"displayName":          displayName,
+		"primaryRegion":        region,
+		"preferredReadRegion":  region,
+		"replicaRegions":       []string{},
+		"storageTier":          d.Get("tier").(string),
+		"redundancy":           strings.ToUpper(d.Get("redundancy").(string)),
+		"consistencyMode":      "session",
+		"writeAcknowledgement": "quorum",
+	}
+}
+
+// storageUpdate applies tier, redundancy and display name changes with
+// PUT /api/StorageAccount/{id}; the account and its data are kept.
+func storageUpdate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
+	c := meta.(*client.Client)
+	if d.HasChanges("tier", "redundancy", "display_name") {
+		id := d.Get("account_id").(string)
+		if id == "" {
+			s, err := findStorage(ctx, c, d.Id())
+			if err != nil || s == nil {
+				return diag.Errorf("storage account %q not found for update: %v", d.Id(), err)
+			}
+			id = s.ID
+		}
+		if err := c.Do(ctx, http.MethodPut, "/api/StorageAccount/"+url.PathEscape(id), storagePayload(d, d.Id(), d.Get("region").(string)), nil); err != nil {
+			return diag.FromErr(err)
+		}
+	}
+	return recordOnly(storageRead)(ctx, d, meta)
 }
 
 func storageRead(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
@@ -354,6 +393,16 @@ func storageRead(ctx context.Context, d *schema.ResourceData, meta any) diag.Dia
 	_ = d.Set("quota_bytes", s.QuotaBytes)
 	if s.PrimaryRegion != "" {
 		_ = d.Set("region", s.PrimaryRegion)
+	}
+	// Reported by the API, so changes made in the console show up as drift.
+	if s.StorageTier != "" {
+		_ = d.Set("tier", s.StorageTier)
+	}
+	if s.Redundancy != "" {
+		_ = d.Set("redundancy", s.Redundancy)
+	}
+	if s.DisplayName != "" {
+		_ = d.Set("display_name", s.DisplayName)
 	}
 	return nil
 }

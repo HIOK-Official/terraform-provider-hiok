@@ -48,6 +48,7 @@ resource "hiok_virtual_machine" "web" {
   network_name     = hiok_virtual_network.app.name
   username         = "ubuntu"
   generate_ssh_key = true
+  power_state      = "running" # set to "stopped" to shut the VM down in place
 
   timeouts {
     create = "30m"
@@ -76,6 +77,20 @@ output "container_hostname" {
 
 output "vm_status" {
   value = hiok_virtual_machine.web.status
+}
+
+output "vm_private_ip" {
+  value = hiok_virtual_machine.web.private_ip
+}
+
+output "vm_ssh_command" {
+  value = hiok_virtual_machine.web.ssh_command
+}
+
+# terraform output -raw vm_private_key > web-01.key && chmod 600 web-01.key
+output "vm_private_key" {
+  value     = hiok_virtual_machine.web.private_key_openssh
+  sensitive = true
 }
 
 output "available_regions" {

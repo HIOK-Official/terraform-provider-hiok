@@ -27,6 +27,7 @@ import (
 
 func TestMain(m *testing.M) {
 	pollInterval = 10 * time.Millisecond
+	client.DefaultRetryWait = 5 * time.Millisecond
 	os.Exit(m.Run())
 }
 
@@ -175,7 +176,7 @@ func TestLifecycle_AllResources(t *testing.T) {
 				ResourceName:            "hiok_virtual_machine.web",
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"image", "vcpu_count", "ram_gb", "network_name", "username", "generate_ssh_key", "hostname", "imported"},
+				ImportStateVerifyIgnore: []string{"image", "vcpu_count", "ram_gb", "network_name", "username", "generate_ssh_key", "hostname", "private_key_openssh", "public_key_openssh", "imported"},
 			},
 			{
 				ResourceName:            "hiok_virtual_network.app",
@@ -267,13 +268,19 @@ resource "hiok_storage_account" "assets" {
 				),
 			},
 			// The flag is cleared even where nothing needed recording, so adding a
-			// subnet to the imported network later is a real (replacing) change.
+			// subnet to the imported network later is a real change (in place).
 			{
 				Config: regexp.MustCompile(`address_space = "10.20.0.0/16"\n`).ReplaceAllString(config,
 					"address_space = \"10.20.0.0/16\"\n  subnet_name   = \"web\"\n  subnet_cidr   = \"10.20.1.0/24\"\n"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
-					plancheck.ExpectResourceAction("hiok_virtual_network.app", plancheck.ResourceActionReplace),
+					plancheck.ExpectResourceAction("hiok_virtual_network.app", plancheck.ResourceActionUpdate),
 				}},
+				Check: func(*terraform.State) error {
+					if sn := m.Subnets("app-net"); len(sn) != 1 || sn[0]["name"] != "web" {
+						return fmt.Errorf("subnet not applied: %v", sn)
+					}
+					return nil
+				},
 			},
 			// After the values are recorded, changing one forces replacement again.
 			{
@@ -605,4 +612,168 @@ func TestUsableRange(t *testing.T) {
 	if _, _, err := usableRange("2001:db8::/64"); err == nil {
 		t.Error("IPv6 subnet_cidr should be rejected")
 	}
+}
+
+// generate_ssh_key creates the pair locally (the platform's own option keeps
+// no retrievable key), sends the public half, and exposes the private half.
+// Connection details come from /connect; power_state changes in place.
+func TestVM_KeysConnectionAndPowerState(t *testing.T) {
+	m := startMock(t, mockapi.Options{})
+	cfg := func(power string) string {
+		return fmt.Sprintf(`
+provider "hiok" {}
+resource "hiok_virtual_machine" "v" {
+  name             = "vm1"
+  username         = "ubuntu"
+  generate_ssh_key = true
+  power_state      = %q
+}`, power)
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		CheckDestroy:             checkAllGone(m),
+		Steps: []resource.TestStep{
+			{
+				Config: cfg("running"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestMatchResourceAttr("hiok_virtual_machine.v", "private_key_openssh", regexp.MustCompile(`^-----BEGIN OPENSSH PRIVATE KEY-----\n`)),
+					resource.TestMatchResourceAttr("hiok_virtual_machine.v", "public_key_openssh", regexp.MustCompile(`^ssh-ed25519 \S+ vm1$`)),
+					resource.TestMatchResourceAttr("hiok_virtual_machine.v", "private_ip", regexp.MustCompile(`^10\.20\.0\.\d+$`)),
+					resource.TestMatchResourceAttr("hiok_virtual_machine.v", "ssh_command", regexp.MustCompile(`^ssh ubuntu@10\.20\.0\.\d+$`)),
+					resource.TestCheckResourceAttr("hiok_virtual_machine.v", "power_state", "running"),
+					func(s *terraform.State) error {
+						pub := s.RootModule().Resources["hiok_virtual_machine.v"].Primary.Attributes["public_key_openssh"]
+						for _, l := range m.Log() {
+							if strings.Contains(l, "create-vm") {
+								if !strings.Contains(l, `"sshPublicKey":"`+pub+`"`) || strings.Contains(l, "generateSshKey") {
+									return fmt.Errorf("create-vm did not send the generated public key: %s", l)
+								}
+								return nil
+							}
+						}
+						return fmt.Errorf("no create-vm call")
+					},
+				),
+			},
+			{
+				Config: cfg("stopped"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("hiok_virtual_machine.v", plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("hiok_virtual_machine.v", "power_state", "stopped"),
+					resource.TestCheckResourceAttr("hiok_virtual_machine.v", "status", "shutoff"),
+				),
+			},
+			{
+				Config: cfg("running"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("hiok_virtual_machine.v", plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.TestCheckResourceAttr("hiok_virtual_machine.v", "status", "running"),
+			},
+		},
+	})
+}
+
+// Tier, redundancy and display name change in place (PUT), keeping the data.
+func TestStorage_UpdateInPlace(t *testing.T) {
+	m := startMock(t, mockapi.Options{})
+	cfg := func(tier, red, display string) string {
+		return fmt.Sprintf(`
+provider "hiok" {}
+resource "hiok_storage_account" "s" {
+  name         = "logs"
+  tier         = %q
+  redundancy   = %q
+  display_name = %q
+}`, tier, red, display)
+	}
+	var id string
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		CheckDestroy:             checkAllGone(m),
+		Steps: []resource.TestStep{
+			{
+				Config: cfg("hot", "LRS", "Logs"),
+				Check: func(s *terraform.State) error {
+					id = s.RootModule().Resources["hiok_storage_account.s"].Primary.Attributes["account_id"]
+					return nil
+				},
+			},
+			{
+				Config: cfg("cool", "ZRS", "Logs (cool)"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("hiok_storage_account.s", plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("hiok_storage_account.s", "tier", "cool"),
+					resource.TestCheckResourceAttr("hiok_storage_account.s", "redundancy", "ZRS"),
+					func(s *terraform.State) error {
+						if got := s.RootModule().Resources["hiok_storage_account.s"].Primary.Attributes["account_id"]; got != id {
+							return fmt.Errorf("account was replaced: %s -> %s", id, got)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// Changing the subnet updates it in place instead of replacing the network.
+func TestVnet_SubnetUpdateInPlace(t *testing.T) {
+	m := startMock(t, mockapi.Options{})
+	cfg := func(name, cidr string) string {
+		return fmt.Sprintf(`
+provider "hiok" {}
+resource "hiok_virtual_network" "n" {
+  name          = "n1"
+  address_space = "10.9.0.0/16"
+  subnet_name   = %q
+  subnet_cidr   = %q
+}`, name, cidr)
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		CheckDestroy:             checkAllGone(m),
+		Steps: []resource.TestStep{
+			{Config: cfg("web", "10.9.1.0/24")},
+			{
+				Config: cfg("app", "10.9.8.0/22"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("hiok_virtual_network.n", plancheck.ResourceActionUpdate),
+				}},
+				Check: func(*terraform.State) error {
+					sn := m.Subnets("n1")
+					if len(sn) != 1 || sn[0]["name"] != "app" || sn[0]["ipRange"] != "10.9.8.2-10.9.11.254" {
+						return fmt.Errorf("subnet not updated in place: %v", sn)
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+// On the live platform a stop-vm was followed by minutes of 502s (sign-in
+// included). Waits and sign-in must ride that out instead of failing.
+func TestVM_SurvivesOutageAfterStop(t *testing.T) {
+	m := startMock(t, mockapi.Options{OutageAfterStop: 12})
+	cfg := func(power string) string {
+		return fmt.Sprintf(`
+provider "hiok" {}
+resource "hiok_virtual_machine" "v" {
+  name        = "vm1"
+  power_state = %q
+}`, power)
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		CheckDestroy:             checkAllGone(m),
+		Steps: []resource.TestStep{
+			{Config: cfg("running")},
+			{Config: cfg("stopped"), Check: resource.TestCheckResourceAttr("hiok_virtual_machine.v", "power_state", "stopped")},
+		},
+	})
 }

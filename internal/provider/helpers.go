@@ -103,7 +103,7 @@ func waitForPresence(ctx context.Context, c *client.Client, name string, find fi
 		target, pending = "absent", "present"
 	}
 	conf := &retry.StateChangeConf{
-		Pending:      []string{pending},
+		Pending:      []string{pending, "unavailable"},
 		Target:       []string{target},
 		Timeout:      timeout,
 		PollInterval: pollInterval,
@@ -113,6 +113,11 @@ func waitForPresence(ctx context.Context, c *client.Client, name string, find fi
 		ContinuousTargetOccurence: 2,
 		Refresh: func() (any, string, error) {
 			found, err := find(ctx, c, name)
+			if client.IsTransient(err) {
+				// The API is briefly unavailable (seen as minutes of 502s on
+				// the live platform); keep waiting until the timeout.
+				return name, "unavailable", nil
+			}
 			if err != nil {
 				return nil, "", err
 			}
@@ -124,7 +129,7 @@ func waitForPresence(ctx context.Context, c *client.Client, name string, find fi
 	}
 	if _, err := conf.WaitForStateContext(ctx); err != nil {
 		if want {
-			return fmt.Errorf("%q was accepted by the API but did not appear within %s: %w", name, timeout, err)
+			return fmt.Errorf("%q was not ready within %s: %w", name, timeout, err)
 		}
 		return fmt.Errorf("%q was not removed within %s: %w", name, timeout, err)
 	}

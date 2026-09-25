@@ -114,6 +114,22 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
+// DefaultRetryWait is the base delay between retries. Tests shrink it.
+var DefaultRetryWait = 2 * time.Second
+
+// IsTransient reports whether err is a temporary failure worth waiting out:
+// a network error or a 429/502/503/504/520-524 response.
+func IsTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return transientStatus(apiErr.StatusCode)
+	}
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
 // New signs in when no token is supplied, otherwise uses the token as-is.
 func New(endpoint, token, email, password string, regions []string) (*Client, error) {
 	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
@@ -132,7 +148,7 @@ func New(endpoint, token, email, password string, regions []string) (*Client, er
 		email:     email,
 		password:  password,
 		http:      &http.Client{Timeout: 5 * time.Minute},
-		RetryWait: 2 * time.Second,
+		RetryWait: DefaultRetryWait,
 	}
 
 	if c.token == "" {
@@ -156,24 +172,42 @@ func (c *Client) canRelogin() bool {
 	return c.email != "" && c.password != ""
 }
 
+// login signs in, retrying for about two minutes while the API is
+// temporarily unavailable (e.g. restarting behind its proxy).
 func (c *Client) login(ctx context.Context) error {
+	var err error
+	for attempt := 1; attempt <= 8; attempt++ {
+		var status int
+		if status, err = c.loginOnce(ctx); err == nil || !(status == 0 || transientStatus(status)) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(c.RetryWait * time.Duration(attempt)):
+		}
+	}
+	return err
+}
+
+func (c *Client) loginOnce(ctx context.Context) (int, error) {
 	body, _ := json.Marshal(map[string]string{"email": c.email, "password": c.password})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint+"/api/OAuth/token", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return -1, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("sign-in request failed: %w", err)
+		return 0, fmt.Errorf("sign-in request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("sign-in failed (%d): %s", resp.StatusCode, messageFrom(raw))
+		return resp.StatusCode, fmt.Errorf("sign-in failed (%d): %s", resp.StatusCode, messageFrom(raw))
 	}
 
 	var parsed struct {
@@ -186,7 +220,7 @@ func (c *Client) login(ctx context.Context) error {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return fmt.Errorf("could not read the sign-in response (is the endpoint correct?): %w", err)
+		return resp.StatusCode, fmt.Errorf("could not read the sign-in response (is the endpoint correct?): %w", err)
 	}
 	token := parsed.Data.Token
 	if token == "" {
@@ -200,13 +234,13 @@ func (c *Client) login(ctx context.Context) error {
 		if msg == "" {
 			msg = "no token in response"
 		}
-		return fmt.Errorf("sign-in failed: %s", msg)
+		return resp.StatusCode, fmt.Errorf("sign-in failed: %s", msg)
 	}
 
 	c.mu.Lock()
 	c.token = token
 	c.mu.Unlock()
-	return nil
+	return resp.StatusCode, nil
 }
 
 // Do issues an authenticated request and decodes the JSON response into out.
