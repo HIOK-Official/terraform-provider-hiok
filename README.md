@@ -52,7 +52,7 @@ Never commit credentials to `.tf` files. A value set in the `provider` block ove
 
 ```hcl
 provider "hiok" {
-  regions = ["south-india"]
+  regions = ["canada"]
 }
 
 resource "hiok_virtual_network" "app" {
@@ -62,9 +62,9 @@ resource "hiok_virtual_network" "app" {
 
 resource "hiok_virtual_machine" "web" {
   name             = "web-01"
-  image            = "ubuntu-24.04"
-  vcpu_count       = 2
-  ram_gb           = 4
+  image            = "ubuntu-24.04-amd64"
+  vcpu_count       = 1
+  ram_gb           = 1
   network_name     = hiok_virtual_network.app.name
   generate_ssh_key = true
 }
@@ -80,6 +80,12 @@ A complete configuration is in [`examples/main.tf`](examples/main.tf). Full refe
 | `hiok_virtual_network` | name |
 | `hiok_container` | name |
 | `hiok_storage_account` | name |
+
+Values accepted by the live API (checked against test.hiokcloud.com):
+
+- `region`: IDs from `data.hiok_regions.x.available_ids` (currently `canada`). When unset, the provider uses the first available region.
+- `image`: IDs from `data.hiok_vm_images.x.ids`, e.g. `ubuntu-24.04-amd64`, `ubuntu-22.04-amd64`, `debian-12-amd64`.
+- storage `tier`: `hot`, `cool`, `cold`, `archive`; `redundancy`: `LRS`, `ZRS`, `GRS`, `RA-GRS`.
 
 All resources:
 

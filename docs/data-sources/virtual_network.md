@@ -30,3 +30,4 @@ data "hiok_virtual_network" "example" {
 - `address_space` (String)
 - `id` (String) The ID of this resource.
 - `status` (String)
+- `vnet_id` (String)

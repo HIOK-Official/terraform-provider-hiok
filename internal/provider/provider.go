@@ -43,7 +43,7 @@ func New() *schema.Provider {
 				Type:        schema.TypeList,
 				Optional:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
-				Description: "Default regions for resources that do not set their own. Defaults to [\"south-india\"].",
+				Description: "Default region for resources that do not set their own (the first entry is used). Defaults to the first available region reported by the API, e.g. \"canada\".",
 			},
 		},
 
@@ -73,9 +73,6 @@ func configure(_ context.Context, d *schema.ResourceData) (any, diag.Diagnostics
 		if s, ok := r.(string); ok && s != "" {
 			regions = append(regions, s)
 		}
-	}
-	if len(regions) == 0 {
-		regions = []string{"south-india"}
 	}
 
 	c, err := client.New(

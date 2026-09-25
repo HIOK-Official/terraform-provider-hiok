@@ -27,6 +27,7 @@ data "hiok_container" "example" {
 
 ### Read-Only
 
+- `dns_hostname` (String)
 - `id` (String) The ID of this resource.
 - `image` (String)
 - `status` (String)

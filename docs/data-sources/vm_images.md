@@ -21,7 +21,8 @@ data "hiok_vm_images" "all" {}
 
 ### Read-Only
 
+- `architectures` (List of String) CPU architecture of each image (`amd64`, `arm64`), in the same order as `ids`.
 - `descriptions` (List of String) Descriptions, in the same order as `ids`.
 - `id` (String) The ID of this resource.
-- `ids` (List of String) Image document IDs.
+- `ids` (List of String) Image IDs, usable as `image` on `hiok_virtual_machine` (e.g. `ubuntu-24.04-amd64`).
 - `names` (List of String) Image names, in the same order as `ids`.

@@ -15,8 +15,8 @@ A storage account. Changing any setting other than `timeouts` replaces the accou
 ```terraform
 resource "hiok_storage_account" "example" {
   name       = "assets"
-  tier       = "standard"
-  redundancy = "lrs"
+  tier       = "hot"
+  redundancy = "LRS"
 }
 ```
 
@@ -29,16 +29,20 @@ resource "hiok_storage_account" "example" {
 
 ### Optional
 
-- `redundancy` (String) Redundancy mode (sent upper-cased, e.g. LRS).
-- `region` (String) Primary region. Defaults to the provider's first region.
-- `tier` (String) Performance tier.
+- `display_name` (String) Friendly name shown in the console. Defaults to `name`.
+- `redundancy` (String) Redundancy: `LRS`, `ZRS`, `GRS` or `RA-GRS`.
+- `region` (String) Primary region, e.g. `canada`. Defaults to the provider's region.
+- `tier` (String) Access tier: `hot`, `cool`, `cold` or `archive`.
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
 
 ### Read-Only
 
+- `account_id` (String) Platform ID of the account (used by the API for most operations).
 - `id` (String) The ID of this resource.
 - `imported` (Boolean) True when the resource was adopted with `terraform import` and its create-time settings have not been recorded yet. The next apply records them without calling the API.
-- `status` (String) Provisioning state.
+- `primary_endpoint` (String) API endpoint of the account.
+- `quota_bytes` (Number) Storage quota in bytes.
+- `status` (String) Provisioning state, e.g. `active`.
 
 <a id="nestedblock--timeouts"></a>
 ### Nested Schema for `timeouts`

@@ -29,6 +29,67 @@ type Client struct {
 
 	// RetryWait is the base delay between retries of transient failures.
 	RetryWait time.Duration
+
+	regionsOnce sync.Once
+	regions     []Region
+	regionsErr  error
+}
+
+// Region is one entry of GET /api/storageaccount/regions.
+type Region struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	Location    string `json:"location"`
+	IsAvailable bool   `json:"isAvailable"`
+}
+
+// ListRegions returns the deployment's regions, fetched once per client.
+func (c *Client) ListRegions(ctx context.Context) ([]Region, error) {
+	c.regionsOnce.Do(func() {
+		var resp struct {
+			Data []Region `json:"data"`
+		}
+		c.regionsErr = c.Do(ctx, http.MethodGet, "/api/storageaccount/regions", nil, &resp)
+		c.regions = resp.Data
+	})
+	return c.regions, c.regionsErr
+}
+
+// CheckRegion fails fast for an unknown or unavailable region. The API does
+// not reject those quickly: a VM create for an unknown region hangs until the
+// edge proxy times out (HTTP 524) after about 100 seconds.
+func (c *Client) CheckRegion(ctx context.Context, id string) error {
+	regions, err := c.ListRegions(ctx)
+	if err != nil || len(regions) == 0 {
+		return nil // cannot check; let the API decide
+	}
+	var valid []string
+	for _, r := range regions {
+		if r.ID == id {
+			if !r.IsAvailable {
+				return fmt.Errorf("region %q exists but is not available for new resources right now", id)
+			}
+			return nil
+		}
+		if r.IsAvailable {
+			valid = append(valid, r.ID)
+		}
+	}
+	return fmt.Errorf("unknown region %q; available regions: %s", id, strings.Join(valid, ", "))
+}
+
+// DefaultRegion is the first available region reported by the API.
+func (c *Client) DefaultRegion(ctx context.Context) (string, error) {
+	regions, err := c.ListRegions(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range regions {
+		if r.IsAvailable {
+			return r.ID, nil
+		}
+	}
+	return "", fmt.Errorf("the HIOK API reports no available region; set `regions` in the provider block")
 }
 
 // APIError is returned for any non-2xx response, or a 2xx response whose
@@ -246,50 +307,74 @@ func (c *Client) send(ctx context.Context, method, path string, buf []byte) (int
 }
 
 func transientStatus(code int) bool {
+	// 520-524 are Cloudflare's "origin unreachable / timed out" codes.
 	return code == http.StatusTooManyRequests || code == http.StatusBadGateway ||
-		code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout
+		code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout ||
+		(code >= 520 && code <= 524)
 }
 
-// envelopeFailed inspects the common HIOK response envelope. Some endpoints
-// answer 200 with {"success": false, "message": "..."} (at the top level or
-// inside "data") instead of an error status; treat that as a failure so the
-// real message reaches the user.
+// envelopeFailed inspects the HIOK response envelope. Some endpoints answer
+// 2xx with {"success": false} or {"data": {"isSuccess": false, "data": "why"}}
+// instead of an error status; treat that as a failure so the real message
+// reaches the user.
 func envelopeFailed(raw []byte) (ok bool, message string) {
 	var env struct {
-		Success *bool           `json:"success"`
-		Message string          `json:"message"`
-		Errors  json.RawMessage `json:"errors"`
-		Data    json.RawMessage `json:"data"`
+		Success   *bool           `json:"success"`
+		IsSuccess *bool           `json:"isSuccess"`
+		Message   string          `json:"message"`
+		Error     string          `json:"error"`
+		Errors    json.RawMessage `json:"errors"`
+		Data      json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(raw, &env) != nil {
 		return true, ""
 	}
-	if env.Success != nil && !*env.Success {
-		return false, firstNonEmpty(env.Message, string(env.Errors), "request was not successful")
+	if (env.Success != nil && !*env.Success) || (env.IsSuccess != nil && !*env.IsSuccess) {
+		return false, joinMessages(env.Message, env.Error, string(env.Errors))
 	}
 	var inner struct {
-		Success *bool  `json:"success"`
-		Message string `json:"message"`
+		Success   *bool           `json:"success"`
+		IsSuccess *bool           `json:"isSuccess"`
+		Message   string          `json:"message"`
+		Data      json.RawMessage `json:"data"`
 	}
-	if len(env.Data) > 0 && env.Data[0] == '{' && json.Unmarshal(env.Data, &inner) == nil &&
-		inner.Success != nil && !*inner.Success {
-		return false, firstNonEmpty(inner.Message, env.Message, "request was not successful")
+	if len(env.Data) > 0 && env.Data[0] == '{' && json.Unmarshal(env.Data, &inner) == nil {
+		if (inner.Success != nil && !*inner.Success) || (inner.IsSuccess != nil && !*inner.IsSuccess) {
+			return false, joinMessages(env.Message, inner.Message, rawString(inner.Data))
+		}
 	}
 	return true, ""
 }
 
-// messageFrom pulls a human-readable message out of an error body.
+// messageFrom pulls a human-readable message out of an error body, e.g.
+// {"message":"Failed to create storage account","error":"Invalid storage tier"},
+// {"message":"Failed Deploying Virtual Machine.","data":{"data":"Failed to download VM image"}},
+// or an ASP.NET validation problem {"title":...,"errors":{"id":["..."]}}.
 func messageFrom(raw []byte) string {
 	var env struct {
-		Message string `json:"message"`
-		Title   string `json:"title"`
-		Error   string `json:"error"`
-		Data    struct {
-			Message string `json:"message"`
-		} `json:"data"`
+		Message string                     `json:"message"`
+		Title   string                     `json:"title"`
+		Error   string                     `json:"error"`
+		Errors  map[string]json.RawMessage `json:"errors"`
+		Data    json.RawMessage            `json:"data"`
 	}
 	if json.Unmarshal(raw, &env) == nil {
-		if m := firstNonEmpty(env.Message, env.Data.Message, env.Error, env.Title); m != "" {
+		var inner struct {
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data"`
+		}
+		innerMsg := ""
+		if len(env.Data) > 0 && env.Data[0] == '{' && json.Unmarshal(env.Data, &inner) == nil {
+			innerMsg = joinMessages(inner.Message, rawString(inner.Data))
+		}
+		var validation []string
+		for field, v := range env.Errors {
+			var msgs []string
+			if json.Unmarshal(v, &msgs) == nil {
+				validation = append(validation, field+": "+strings.Join(msgs, "; "))
+			}
+		}
+		if m := joinMessages(env.Message, env.Title, env.Error, innerMsg, strings.Join(validation, ", ")); m != "" {
 			return m
 		}
 	}
@@ -301,6 +386,36 @@ func messageFrom(raw []byte) string {
 		s = "(empty response body)"
 	}
 	return s
+}
+
+// rawString returns v if it is a JSON string, else "".
+func rawString(v json.RawMessage) string {
+	var s string
+	if len(v) > 0 && v[0] == '"' && json.Unmarshal(v, &s) == nil {
+		return s
+	}
+	return ""
+}
+
+// joinMessages joins the distinct non-empty parts with ": ".
+func joinMessages(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" || p == "null" {
+			continue
+		}
+		dup := false
+		for _, o := range out {
+			if o == p {
+				dup = true
+			}
+		}
+		if !dup {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, ": ")
 }
 
 func firstNonEmpty(values ...string) string {

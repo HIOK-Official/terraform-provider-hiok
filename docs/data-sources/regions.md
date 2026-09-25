@@ -21,6 +21,7 @@ data "hiok_regions" "all" {}
 
 ### Read-Only
 
+- `available_ids` (List of String) IDs of the regions currently accepting new resources.
 - `id` (String) The ID of this resource.
-- `ids` (List of String) Region IDs, usable as `region` on resources.
+- `ids` (List of String) All region IDs, usable as `region` on resources.
 - `names` (List of String) Display names, in the same order as `ids`.

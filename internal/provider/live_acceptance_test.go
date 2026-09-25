@@ -29,9 +29,9 @@ func TestAccLive(t *testing.T) {
 	}
 	pollInterval = pollIntervalLive
 
-	region := envOr("HIOK_ACC_REGION", "south-india")
-	image := envOr("HIOK_ACC_IMAGE", "ubuntu-24.04")
-	suffix := acctest.RandStringFromCharSet(6, acctest.CharSetAlphaNum)
+	region := envOr("HIOK_ACC_REGION", "canada")
+	image := envOr("HIOK_ACC_IMAGE", defaultVMImage)
+	suffix := acctest.RandStringFromCharSet(6, "abcdefghijklmnopqrstuvwxyz0123456789")
 	vnet, vm, ct, sa := "tf-acc-net-"+suffix, "tf-acc-vm-"+suffix, "tf-acc-ct-"+suffix, "tfacc"+suffix
 
 	config := fmt.Sprintf(`
@@ -52,6 +52,7 @@ resource "hiok_virtual_machine" "t" {
   image            = %[2]q
   vcpu_count       = 1
   ram_gb           = 1
+  disk_size_gb     = 10
   network_name     = hiok_virtual_network.t.name
   username         = "ubuntu"
   generate_ssh_key = true
@@ -95,7 +96,14 @@ resource "hiok_storage_account" "t" {
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("hiok_virtual_machine.t", "id", vm),
-					resource.TestCheckResourceAttrSet("hiok_virtual_machine.t", "status"),
+					resource.TestCheckResourceAttr("hiok_virtual_machine.t", "status", "running"),
+					resource.TestCheckResourceAttr("hiok_virtual_machine.t", "region", region),
+					resource.TestCheckResourceAttrSet("hiok_virtual_machine.t", "vm_id"),
+					resource.TestCheckResourceAttrSet("hiok_virtual_machine.t", "hostname"),
+					resource.TestCheckResourceAttrSet("hiok_virtual_network.t", "vnet_id"),
+					resource.TestCheckResourceAttrSet("hiok_container.t", "dns_hostname"),
+					resource.TestCheckResourceAttrSet("hiok_storage_account.t", "account_id"),
+					resource.TestCheckResourceAttr("data.hiok_regions.all", "available_ids.0", region),
 					resource.TestCheckResourceAttr("hiok_virtual_network.t", "id", vnet),
 					resource.TestCheckResourceAttr("hiok_container.t", "id", ct),
 					resource.TestCheckResourceAttr("hiok_storage_account.t", "id", sa),
@@ -106,13 +114,13 @@ resource "hiok_storage_account" "t" {
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
 			},
 			{ResourceName: "hiok_virtual_machine.t", ImportState: true, ImportStateVerify: true,
-				ImportStateVerifyIgnore: []string{"image", "vcpu_count", "ram_gb", "network_name", "username", "generate_ssh_key", "imported"}},
+				ImportStateVerifyIgnore: []string{"image", "vcpu_count", "ram_gb", "disk_size_gb", "network_name", "username", "generate_ssh_key", "hostname", "imported"}},
 			{ResourceName: "hiok_virtual_network.t", ImportState: true, ImportStateVerify: true,
 				ImportStateVerifyIgnore: []string{"address_space", "subnet_name", "subnet_cidr", "imported"}},
 			{ResourceName: "hiok_container.t", ImportState: true, ImportStateVerify: true,
 				ImportStateVerifyIgnore: []string{"image", "env", "imported"}},
 			{ResourceName: "hiok_storage_account.t", ImportState: true, ImportStateVerify: true,
-				ImportStateVerifyIgnore: []string{"tier", "redundancy", "imported"}},
+				ImportStateVerifyIgnore: []string{"tier", "redundancy", "display_name", "imported"}},
 		},
 	})
 }

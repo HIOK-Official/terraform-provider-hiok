@@ -30,7 +30,7 @@ func resourceContainer() *schema.Resource {
 		Schema: map[string]*schema.Schema{
 			"name":     {Type: schema.TypeString, Required: true, ForceNew: true, ValidateFunc: validateName, Description: "Container name."},
 			"image":    {Type: schema.TypeString, Required: true, ValidateFunc: validation.StringIsNotWhiteSpace, Description: "Image reference, e.g. nginx:alpine."},
-			"region":   {Type: schema.TypeString, Optional: true, Description: "Region to deploy into. Defaults to the provider's regions."},
+			"region":   {Type: schema.TypeString, Optional: true, Description: "Region to deploy into. When unset the platform places the container."},
 			"hostname": {Type: schema.TypeString, Optional: true, Description: "Hostname inside the container."},
 			"env": {
 				Type:        schema.TypeList,
@@ -44,39 +44,35 @@ func resourceContainer() *schema.Resource {
 				Elem:        &schema.Schema{Type: schema.TypeString},
 				Description: "Override the image entrypoint command.",
 			},
-			"status":   {Type: schema.TypeString, Computed: true, Description: "Current container state."},
-			"imported": importedSchema(),
+			"status":       {Type: schema.TypeString, Computed: true, Description: "Current container state, e.g. `running`."},
+			"container_id": {Type: schema.TypeString, Computed: true, Description: "Docker container ID."},
+			"dns_hostname": {Type: schema.TypeString, Computed: true, Description: "Public DNS name, e.g. `api-01.hiokcloud.com`."},
+			"imported":     importedSchema(),
 		},
 	}
 }
 
 type containerInfo struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Image  string `json:"image"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Image       string `json:"image"`
+	DNSHostname string `json:"dnsHostname"`
 }
 
-// containerPageSize is the page size for listallcontainers. Tests shrink it.
-var containerPageSize = 200
-
 func findContainer(ctx context.Context, c *client.Client, name string) (*containerInfo, error) {
-	// Walk every page: an account with more containers than one page must not
-	// make Terraform believe a container was deleted.
-	for page := 1; page <= 1000; page++ {
-		var resp struct {
-			Data []containerInfo `json:"data"`
-		}
-		body := map[string]any{"pageNumber": page, "pageSize": containerPageSize}
-		if err := c.DoIdempotent(ctx, http.MethodPost, "/api/Containers/listallcontainers", body, &resp); err != nil {
-			return nil, err
-		}
-		for i := range resp.Data {
-			if client.VisibleName(resp.Data[i].Name) == name {
-				return &resp.Data[i], nil
-			}
-		}
-		if len(resp.Data) < containerPageSize {
-			return nil, nil
+	// listallcontainers ignores paging fields and always returns every
+	// container, so one call is enough.
+	var resp struct {
+		Data []containerInfo `json:"data"`
+	}
+	body := map[string]any{"pageNumber": 1, "pageSize": 1000}
+	if err := c.DoIdempotent(ctx, http.MethodPost, "/api/Containers/listallcontainers", body, &resp); err != nil {
+		return nil, err
+	}
+	for i := range resp.Data {
+		if client.VisibleName(resp.Data[i].Name) == name {
+			return &resp.Data[i], nil
 		}
 	}
 	return nil, nil
@@ -98,9 +94,14 @@ func containerCreate(ctx context.Context, d *schema.ResourceData, meta any) diag
 	}
 
 	payload := map[string]any{
-		"name":    name,
-		"image":   d.Get("image").(string),
-		"regions": regionsFor(d, c),
+		"name":  name,
+		"image": d.Get("image").(string),
+	}
+	if r, ok := d.GetOk("region"); ok {
+		if err := c.CheckRegion(ctx, r.(string)); err != nil {
+			return diag.FromErr(err)
+		}
+		payload["regions"] = []string{r.(string)}
 	}
 	if v, ok := d.GetOk("hostname"); ok {
 		payload["hostname"] = v.(string)
@@ -137,6 +138,11 @@ func containerRead(ctx context.Context, d *schema.ResourceData, meta any) diag.D
 	}
 	_ = d.Set("name", d.Id())
 	_ = d.Set("status", ct.Status)
+	_ = d.Set("container_id", ct.ID)
+	_ = d.Set("dns_hostname", ct.DNSHostname)
+	if d.Get("imported").(bool) && ct.Image != "" && d.Get("image").(string) == "" {
+		_ = d.Set("image", ct.Image)
+	}
 	return nil
 }
 

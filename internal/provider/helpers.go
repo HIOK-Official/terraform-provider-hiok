@@ -47,6 +47,49 @@ func cidrWithin(inner, outer string) error {
 	return nil
 }
 
+// usableRange converts an IPv4 CIDR to the API's subnet form: the usable
+// range (network+2 .. broadcast-1, as the HIOK console computes it) and the
+// prefix length, e.g. 10.0.1.0/24 -> "10.0.1.2-10.0.1.254", "24".
+func usableRange(cidr string) (ipRange, size string, err error) {
+	_, n, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid CIDR %q: %w", cidr, err)
+	}
+	ip := n.IP.To4()
+	if ip == nil {
+		return "", "", fmt.Errorf("subnet_cidr %q must be IPv4", cidr)
+	}
+	ones, bits := n.Mask.Size()
+	if bits-ones < 2 {
+		return "", "", fmt.Errorf("subnet_cidr %q is too small; use /30 or larger", cidr)
+	}
+	start := ipToUint(ip) + 2
+	end := ipToUint(ip) | ^ipToUint(net.IP(n.Mask).To4())
+	end--
+	if start > end {
+		start = end
+	}
+	return uintToIP(start) + "-" + uintToIP(end), fmt.Sprint(ones), nil
+}
+
+func ipToUint(ip net.IP) uint32 {
+	ip = ip.To4()
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+}
+
+func uintToIP(v uint32) string {
+	return net.IPv4(byte(v>>24), byte(v>>16), byte(v>>8), byte(v)).String()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // finder looks a resource up by its visible name; found=false means absent.
 type finder func(ctx context.Context, c *client.Client, name string) (found bool, err error)
 
@@ -169,18 +212,25 @@ func recordOnly(read schema.ReadContextFunc) schema.UpdateContextFunc {
 	}
 }
 
-func regionsFor(d *schema.ResourceData, c *client.Client) []string {
-	if r, ok := d.GetOk("region"); ok && r.(string) != "" {
-		return []string{r.(string)}
+// resolveRegion picks the resource's region (its own `region`, else the
+// provider's first region, else the first available one from the API) and
+// checks it exists, so a typo fails in seconds instead of hanging the API.
+func resolveRegion(ctx context.Context, d *schema.ResourceData, c *client.Client) (string, error) {
+	region := ""
+	if r, ok := d.GetOk("region"); ok {
+		region = r.(string)
+	} else if len(c.Regions) > 0 {
+		region = c.Regions[0]
+	} else {
+		var err error
+		if region, err = c.DefaultRegion(ctx); err != nil {
+			return "", err
+		}
 	}
-	return c.Regions
-}
-
-func firstRegion(d *schema.ResourceData, c *client.Client) string {
-	if r := regionsFor(d, c); len(r) > 0 {
-		return r[0]
+	if err := c.CheckRegion(ctx, region); err != nil {
+		return "", err
 	}
-	return ""
+	return region, nil
 }
 
 func stringList(d *schema.ResourceData, key string) []string {

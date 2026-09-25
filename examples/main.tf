@@ -17,8 +17,9 @@ provider "hiok" {
 }
 
 variable "region" {
-  type    = string
-  default = "south-india"
+  type        = string
+  default     = "canada"
+  description = "See data.hiok_regions.available.available_ids for the regions accepting new resources."
 }
 
 variable "prefix" {
@@ -40,9 +41,10 @@ resource "hiok_virtual_network" "app" {
 
 resource "hiok_virtual_machine" "web" {
   name             = "${var.prefix}-web-01"
-  image            = "ubuntu-24.04"
-  vcpu_count       = 2
-  ram_gb           = 4
+  image            = "ubuntu-24.04-amd64"
+  vcpu_count       = 1
+  ram_gb           = 1
+  disk_size_gb     = 10
   network_name     = hiok_virtual_network.app.name
   username         = "ubuntu"
   generate_ssh_key = true
@@ -60,22 +62,26 @@ resource "hiok_container" "api" {
 
 resource "hiok_storage_account" "assets" {
   name       = "${var.prefix}assets"
-  tier       = "standard"
-  redundancy = "lrs"
+  tier       = "hot"
+  redundancy = "LRS"
 }
 
-output "vm_private_ip" {
-  value = hiok_virtual_machine.web.private_ip
+output "vm_hostname" {
+  value = hiok_virtual_machine.web.hostname
+}
+
+output "container_hostname" {
+  value = hiok_container.api.dns_hostname
 }
 
 output "vm_status" {
   value = hiok_virtual_machine.web.status
 }
 
-output "regions" {
-  value = data.hiok_regions.available.ids
+output "available_regions" {
+  value = data.hiok_regions.available.available_ids
 }
 
 output "images" {
-  value = data.hiok_vm_images.available.names
+  value = data.hiok_vm_images.available.ids
 }

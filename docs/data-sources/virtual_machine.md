@@ -31,3 +31,5 @@ data "hiok_virtual_machine" "example" {
 - `private_ip` (String)
 - `region` (String)
 - `status` (String)
+- `vcpu_count` (Number)
+- `vm_id` (String)

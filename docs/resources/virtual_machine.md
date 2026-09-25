@@ -15,8 +15,8 @@ A KVM virtual machine. The HIOK API has no in-place update for virtual machines,
 ```terraform
 resource "hiok_virtual_machine" "example" {
   name             = "web-01"
-  region           = "south-india"
-  image            = "ubuntu-24.04"
+  region           = "canada"
+  image            = "ubuntu-24.04-amd64"
   vcpu_count       = 2
   ram_gb           = 4
   network_name     = "app-net"
@@ -39,11 +39,13 @@ resource "hiok_virtual_machine" "example" {
 
 ### Optional
 
+- `disk_size_gb` (Number) Root disk size in GiB. Defaults to the platform's size for the image.
 - `generate_ssh_key` (Boolean) Have the platform generate a keypair; download the private key from the HIOK console.
-- `image` (String) Base image, sent to the API as `sourceFilePath`.
-- `network_name` (String) Virtual network (libvirt network or OVS bridge) to attach to.
+- `image` (String) Base image ID, as listed in `hiok_vm_images.ids` (e.g. `ubuntu-24.04-amd64`, `debian-12-amd64`).
+- `network_name` (String) Virtual network to attach to, usually a `hiok_virtual_network` name.
+- `password` (String, Sensitive) Password for the cloud-init user (password authentication). Prefer SSH keys.
 - `ram_gb` (Number) Memory in GiB.
-- `region` (String) Region to deploy into. Defaults to the provider's first region.
+- `region` (String) Region to deploy into, e.g. `canada`. Defaults to the provider's region.
 - `ssh_public_key` (String) Public key authorised for the cloud-init user.
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
 - `username` (String) cloud-init user created on first boot.
@@ -51,10 +53,12 @@ resource "hiok_virtual_machine" "example" {
 
 ### Read-Only
 
+- `hostname` (String) Public DNS name assigned at creation, e.g. `web-01-canada-1a2b3c.hiokcloud.com`. Not known for imported VMs.
 - `id` (String) The ID of this resource.
 - `imported` (Boolean) True when the resource was adopted with `terraform import` and its create-time settings have not been recorded yet. The next apply records them without calling the API.
-- `private_ip` (String) Address on the attached network.
-- `status` (String) Current power state.
+- `private_ip` (String) Address on the attached network, when the API reports one (the current API does not).
+- `status` (String) Current power state, e.g. `running`.
+- `vm_id` (String) Platform ID of the virtual machine.
 
 <a id="nestedblock--timeouts"></a>
 ### Nested Schema for `timeouts`

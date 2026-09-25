@@ -1,11 +1,13 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"net/http/httptest"
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 
+	"github.com/HIOK-Official/terraform-provider-hiok/internal/client"
 	"github.com/HIOK-Official/terraform-provider-hiok/internal/mockapi"
 )
 
@@ -57,7 +60,7 @@ func checkAllGone(m *mockapi.Server) resource.TestCheckFunc {
 
 const fullConfig = `
 provider "hiok" {
-  regions = ["south-india"]
+  regions = ["canada"]
 }
 
 data "hiok_regions" "all" {}
@@ -73,7 +76,7 @@ resource "hiok_virtual_network" "app" {
 # No region on purpose: it must default without causing drift.
 resource "hiok_virtual_machine" "web" {
   name             = "web-01"
-  image            = "ubuntu-24.04"
+  image            = "ubuntu-24.04-amd64"
   vcpu_count       = 2
   ram_gb           = 4
   network_name     = hiok_virtual_network.app.name
@@ -89,8 +92,8 @@ resource "hiok_container" "api" {
 
 resource "hiok_storage_account" "assets" {
   name       = "assets"
-  tier       = "standard"
-  redundancy = "lrs"
+  tier       = "hot"
+  redundancy = "LRS"
 }
 
 data "hiok_virtual_machine" "web" {
@@ -121,19 +124,35 @@ func TestLifecycle_AllResources(t *testing.T) {
 				Config: fullConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("hiok_virtual_machine.web", "id", "web-01"),
-					resource.TestCheckResourceAttr("hiok_virtual_machine.web", "region", "south-india"),
+					resource.TestCheckResourceAttr("hiok_virtual_machine.web", "region", "canada"),
 					resource.TestCheckResourceAttr("hiok_virtual_machine.web", "status", "running"),
-					resource.TestCheckResourceAttr("hiok_virtual_machine.web", "private_ip", "10.20.1.5"),
+					resource.TestMatchResourceAttr("hiok_virtual_machine.web", "hostname", regexp.MustCompile(`^web-01-canada-[0-9a-f]+\.hiokcloud\.com$`)),
+					resource.TestCheckResourceAttrSet("hiok_virtual_machine.web", "vm_id"),
 					resource.TestCheckResourceAttr("hiok_virtual_machine.web", "imported", "false"),
-					resource.TestCheckResourceAttr("hiok_virtual_network.app", "status", "active"),
+					resource.TestCheckResourceAttr("hiok_virtual_network.app", "status", "Available"),
+					resource.TestCheckResourceAttrSet("hiok_virtual_network.app", "vnet_id"),
 					resource.TestCheckResourceAttr("hiok_container.api", "status", "running"),
-					resource.TestCheckResourceAttr("hiok_storage_account.assets", "status", "available"),
-					resource.TestCheckResourceAttr("data.hiok_regions.all", "ids.#", "2"),
-					resource.TestCheckResourceAttr("data.hiok_vm_images.all", "names.0", "ubuntu-24.04"),
-					resource.TestCheckResourceAttr("data.hiok_virtual_machine.web", "private_ip", "10.20.1.5"),
+					resource.TestCheckResourceAttr("hiok_container.api", "dns_hostname", "api-01.hiokcloud.com"),
+					resource.TestCheckResourceAttr("hiok_storage_account.assets", "status", "active"),
+					resource.TestCheckResourceAttrSet("hiok_storage_account.assets", "account_id"),
+					resource.TestCheckResourceAttr("data.hiok_regions.all", "ids.#", "3"),
+					resource.TestCheckResourceAttr("data.hiok_regions.all", "available_ids.#", "1"),
+					resource.TestCheckResourceAttr("data.hiok_regions.all", "available_ids.0", "canada"),
+					resource.TestCheckResourceAttr("data.hiok_vm_images.all", "ids.0", "ubuntu-24.04-amd64"),
+					resource.TestCheckResourceAttr("data.hiok_virtual_machine.web", "vcpu_count", "2"),
 					resource.TestCheckResourceAttr("data.hiok_virtual_network.app", "address_space", "10.20.0.0/16"),
 					resource.TestCheckResourceAttr("data.hiok_container.api", "image", "nginx:alpine"),
-					resource.TestCheckResourceAttr("data.hiok_storage_account.assets", "primary_region", "south-india"),
+					resource.TestCheckResourceAttr("data.hiok_storage_account.assets", "primary_region", "canada"),
+					resource.TestCheckResourceAttr("data.hiok_storage_account.assets", "tier", "hot"),
+					// create-vnet ignores subnet fields; the provider rewrites the
+					// platform's "default" subnet into the requested one.
+					func(*terraform.State) error {
+						sn := m.Subnets("app-net")
+						if len(sn) != 1 || sn[0]["name"] != "web" || sn[0]["ipRange"] != "10.20.1.2-10.20.1.254" || sn[0]["size"] != "24" {
+							return fmt.Errorf("subnet not configured as requested: %v", sn)
+						}
+						return nil
+					},
 					func(*terraform.State) error {
 						for kind, want := range map[string]string{"vm": "web-01", "vnet": "app-net", "ct": "api-01", "sa": "assets"} {
 							if !slices.Equal(m.Names(kind), []string{want}) {
@@ -156,13 +175,13 @@ func TestLifecycle_AllResources(t *testing.T) {
 				ResourceName:            "hiok_virtual_machine.web",
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"image", "vcpu_count", "ram_gb", "network_name", "username", "generate_ssh_key", "imported"},
+				ImportStateVerifyIgnore: []string{"image", "vcpu_count", "ram_gb", "network_name", "username", "generate_ssh_key", "hostname", "imported"},
 			},
 			{
 				ResourceName:            "hiok_virtual_network.app",
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"subnet_name", "subnet_cidr", "imported"},
+				ImportStateVerifyIgnore: []string{"subnet_name", "subnet_cidr", "region", "imported"},
 			},
 			{
 				ResourceName:            "hiok_container.api",
@@ -174,7 +193,7 @@ func TestLifecycle_AllResources(t *testing.T) {
 				ResourceName:            "hiok_storage_account.assets",
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"tier", "redundancy", "imported"},
+				ImportStateVerifyIgnore: []string{"tier", "redundancy", "region", "imported"},
 			},
 		},
 	})
@@ -184,10 +203,10 @@ func TestLifecycle_AllResources(t *testing.T) {
 // the first apply only records the configured values, with no API calls.
 func TestImport_DoesNotReplace(t *testing.T) {
 	m := startMock(t, mockapi.Options{})
-	m.Put("vm", "web-01", map[string]any{"regionId": "south-india", "status": "running", "privateIp": "10.0.0.9"})
-	m.Put("vnet", "app-net", map[string]any{"status": "active", "addressSpace": "10.20.0.0/16"})
+	m.Put("vm", "web-01", map[string]any{"regionId": "canada", "state": "running", "vCpu": 2})
+	m.Put("vnet", "app-net", map[string]any{"status": "Available", "regionId": "canada", "addressSpace": "10.20.0.0/16"})
 	m.Put("ct", "api-01", map[string]any{"status": "running", "image": "nginx:alpine"})
-	m.Put("sa", "assets", map[string]any{"status": "available"})
+	m.Put("sa", "assets", map[string]any{"status": "active", "primaryRegion": "canada", "storageTier": "hot", "redundancy": "LRS"})
 
 	config := `
 provider "hiok" {}
@@ -279,7 +298,7 @@ provider "hiok" {}
 resource "hiok_virtual_machine" "web" {
   name = "web-01"
 }`,
-			ExpectError: regexp.MustCompile(`Quota exceeded: 0 vCPU remaining`),
+			ExpectError: regexp.MustCompile(`Failed Deploying Virtual Machine.: Quota exceeded: 0 vCPU remaining`),
 		}},
 	})
 }
@@ -310,6 +329,14 @@ func TestValidation(t *testing.T) {
   ssh_public_key   = "ssh-ed25519 AAAA"
   generate_ssh_key = true
 }`: `conflicts with`,
+		`resource "hiok_storage_account" "x" {
+  name = "s1"
+  tier = "standard"
+}`: `expected tier to be one of ["hot" "cool" "cold" "archive"]`,
+		`resource "hiok_storage_account" "x" {
+  name       = "s1"
+  redundancy = "XYZ"
+}`: `expected redundancy to be one of`,
 	}
 	for cfg, want := range cases {
 		t.Run(want, func(t *testing.T) {
@@ -378,7 +405,7 @@ resource "hiok_storage_account" "s" {
 // silently adopting (and later destroying) someone else's resource.
 func TestCreate_ExistingNameSuggestsImport(t *testing.T) {
 	m := startMock(t, mockapi.Options{})
-	m.Put("vm", "web-01", map[string]any{"regionId": "south-india"})
+	m.Put("vm", "web-01", map[string]any{"regionId": "canada", "state": "running"})
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV5ProviderFactories: factories,
 		Steps: []resource.TestStep{{
@@ -392,15 +419,12 @@ resource "hiok_virtual_machine" "web" {
 	})
 }
 
-// More containers than one page: the managed one must still be found.
-func TestContainer_Pagination(t *testing.T) {
-	old := containerPageSize
-	containerPageSize = 5
-	t.Cleanup(func() { containerPageSize = old })
-
+// listallcontainers ignores paging and returns everything: one call must be
+// enough, and destroy must only remove the managed container.
+func TestContainer_ManyContainers(t *testing.T) {
 	m := startMock(t, mockapi.Options{})
-	for i := 0; i < 12; i++ {
-		m.Put("ct", fmt.Sprintf("a-other-%02d", i), map[string]any{"status": "running"})
+	for i := 0; i < 250; i++ {
+		m.Put("ct", fmt.Sprintf("a-other-%03d", i), map[string]any{"status": "running"})
 	}
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV5ProviderFactories: factories,
@@ -414,11 +438,121 @@ resource "hiok_container" "z" {
 			Check: resource.TestCheckResourceAttr("hiok_container.z", "status", "running"),
 		}},
 		CheckDestroy: func(*terraform.State) error {
-			if n := len(m.Names("ct")); n != 12 {
+			if n := len(m.Names("ct")); n != 250 {
 				return fmt.Errorf("expected only zz-mine to be deleted, %d containers left", n)
 			}
 			return nil
 		},
+	})
+}
+
+// Behaviour recorded from the live API: destroy-vm needs a JSON body (a query
+// string gets 415), storage accounts are deleted by UUID (the name gets 400),
+// and a network deleted outside Terraform answers 400 on delete.
+func TestDelete_UsesRealAPIContract(t *testing.T) {
+	m := startMock(t, mockapi.Options{})
+	cfg := `
+provider "hiok" {}
+resource "hiok_virtual_network" "n" {
+  name          = "n1"
+  address_space = "10.9.0.0/16"
+}
+resource "hiok_virtual_machine" "v" {
+  name         = "vm1"
+  network_name = hiok_virtual_network.n.name
+}
+resource "hiok_storage_account" "s" {
+  name = "logs"
+}`
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		CheckDestroy: func(s *terraform.State) error {
+			if err := checkAllGone(m)(s); err != nil {
+				return err
+			}
+			var sawVMBody, sawStorageByID bool
+			for _, l := range m.Log() {
+				sawVMBody = sawVMBody || regexp.MustCompile(`^DELETE /api/VirtualMachine/destroy-vm \{"regions":\["canada"\],"vmName":"vm1"\}$`).MatchString(l)
+				sawStorageByID = sawStorageByID || regexp.MustCompile(`^DELETE /api/StorageAccount/0{8}-0{4}-4000-8000-\d{12}$`).MatchString(l)
+			}
+			if !sawVMBody || !sawStorageByID {
+				return fmt.Errorf("unexpected delete calls (vm body %v, storage by id %v):\n%s", sawVMBody, sawStorageByID, strings.Join(m.Log(), "\n"))
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{{Config: cfg}},
+	})
+}
+
+// delete-vnet answers 400 for a network that is already gone (e.g. removed in
+// the console between refresh and destroy); that must not fail the destroy.
+func TestVnetDelete_AlreadyGone(t *testing.T) {
+	startMock(t, mockapi.Options{})
+	c, err := client.New(os.Getenv("HIOK_ENDPOINT"), "", "tester@example.com", "secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := schema.TestResourceDataRaw(t, resourceVirtualNetwork().Schema, map[string]any{"name": "gone", "address_space": "10.0.0.0/16"})
+	d.SetId("gone")
+	if diags := vnetDelete(context.Background(), d, c); diags.HasError() {
+		t.Fatalf("destroy of an already-deleted network failed: %v", diags)
+	}
+	if d.Id() != "" {
+		t.Fatal("resource not removed from state")
+	}
+}
+
+// Unknown regions fail in seconds with the valid list; the live API would
+// hang for ~100s and return a Cloudflare 524.
+func TestRegion_UnknownFailsFast(t *testing.T) {
+	startMock(t, mockapi.Options{})
+	for region, want := range map[string]string{
+		"south-india":   `unknown region "south-india"; available regions: canada`,
+		"central-india": `region "central-india" exists but is not available`,
+	} {
+		t.Run(region, func(t *testing.T) {
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV5ProviderFactories: factories,
+				Steps: []resource.TestStep{{
+					Config:      fmt.Sprintf("provider \"hiok\" {}\nresource \"hiok_virtual_machine\" \"v\" {\n  name   = \"vm1\"\n  region = %q\n}\n", region),
+					ExpectError: regexp.MustCompile(regexp.QuoteMeta(want)),
+				}},
+			})
+		})
+	}
+}
+
+// Without `regions`, the provider uses the first available region from the API.
+func TestRegion_DefaultsToFirstAvailable(t *testing.T) {
+	m := startMock(t, mockapi.Options{})
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		CheckDestroy:             checkAllGone(m),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "hiok" {}
+resource "hiok_storage_account" "s" {
+  name = "logs"
+}`,
+			Check: resource.TestCheckResourceAttr("hiok_storage_account.s", "region", "canada"),
+		}},
+	})
+}
+
+// The reason for a failed VM create is nested in data.data.
+func TestCreate_BadImageShowsReason(t *testing.T) {
+	startMock(t, mockapi.Options{})
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: `
+provider "hiok" {}
+resource "hiok_virtual_machine" "v" {
+  name  = "vm1"
+  image = "ubuntu-24.04"
+}`,
+			ExpectError: regexp.MustCompile(`Failed Deploying Virtual Machine.: Failed to download VM image`),
+		}},
 	})
 }
 
@@ -454,5 +588,21 @@ func TestProviderConfig_Errors(t *testing.T) {
 func TestProviderInternalValidate(t *testing.T) {
 	if err := New().InternalValidate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUsableRange(t *testing.T) {
+	for cidr, want := range map[string][2]string{
+		"10.20.1.0/24":   {"10.20.1.2-10.20.1.254", "24"},
+		"10.231.0.0/16":  {"10.231.0.2-10.231.255.254", "16"},
+		"192.168.0.0/30": {"192.168.0.2-192.168.0.2", "30"},
+	} {
+		r, size, err := usableRange(cidr)
+		if err != nil || r != want[0] || size != want[1] {
+			t.Errorf("usableRange(%s) = %q, %q, %v; want %q, %q", cidr, r, size, err, want[0], want[1])
+		}
+	}
+	if _, _, err := usableRange("2001:db8::/64"); err == nil {
+		t.Error("IPv6 subnet_cidr should be rejected")
 	}
 }

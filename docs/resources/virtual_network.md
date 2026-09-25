@@ -26,21 +26,22 @@ resource "hiok_virtual_network" "example" {
 
 ### Required
 
-- `address_space` (String) CIDR block, e.g. 10.10.0.0/16.
+- `address_space` (String) IPv4 CIDR block, e.g. 10.10.0.0/16.
 - `name` (String) Network name.
 
 ### Optional
 
-- `region` (String) Region to create the network in. Defaults to the provider's regions.
-- `subnet_cidr` (String) CIDR of the first subnet; must sit inside address_space.
-- `subnet_name` (String) Name of the first subnet.
+- `region` (String) Region to create the network in, e.g. `canada`. Defaults to the provider's region.
+- `subnet_cidr` (String) IPv4 CIDR of the subnet; must sit inside address_space.
+- `subnet_name` (String) Name of the network's subnet. Without it the platform creates a subnet named `default` spanning the whole address space.
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
 
 ### Read-Only
 
 - `id` (String) The ID of this resource.
 - `imported` (Boolean) True when the resource was adopted with `terraform import` and its create-time settings have not been recorded yet. The next apply records them without calling the API.
-- `status` (String) Provisioning state.
+- `status` (String) Provisioning state, e.g. `Available`.
+- `vnet_id` (String) Platform ID of the network.
 
 <a id="nestedblock--timeouts"></a>
 ### Nested Schema for `timeouts`

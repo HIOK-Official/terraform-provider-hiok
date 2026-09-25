@@ -27,6 +27,9 @@ data "hiok_storage_account" "example" {
 
 ### Read-Only
 
+- `account_id` (String)
 - `id` (String) The ID of this resource.
 - `primary_region` (String)
+- `redundancy` (String)
 - `status` (String)
+- `tier` (String)

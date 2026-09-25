@@ -34,14 +34,16 @@ resource "hiok_container" "example" {
 - `command` (List of String) Override the image entrypoint command.
 - `env` (List of String) Environment variables as "KEY=value" strings.
 - `hostname` (String) Hostname inside the container.
-- `region` (String) Region to deploy into. Defaults to the provider's regions.
+- `region` (String) Region to deploy into. When unset the platform places the container.
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
 
 ### Read-Only
 
+- `container_id` (String) Docker container ID.
+- `dns_hostname` (String) Public DNS name, e.g. `api-01.hiokcloud.com`.
 - `id` (String) The ID of this resource.
 - `imported` (Boolean) True when the resource was adopted with `terraform import` and its create-time settings have not been recorded yet. The next apply records them without calling the API.
-- `status` (String) Current container state.
+- `status` (String) Current container state, e.g. `running`.
 
 <a id="nestedblock--timeouts"></a>
 ### Nested Schema for `timeouts`

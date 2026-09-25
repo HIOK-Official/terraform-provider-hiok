@@ -16,7 +16,7 @@ description: |-
 # Credentials and endpoint from HIOK_ENDPOINT and HIOK_TOKEN
 # (or HIOK_EMAIL / HIOK_PASSWORD).
 provider "hiok" {
-  regions = ["south-india"]
+  regions = ["canada"]
 }
 ```
 
@@ -28,5 +28,5 @@ provider "hiok" {
 - `email` (String) Account email, used to obtain a token when none is set. Can be set with HIOK_EMAIL.
 - `endpoint` (String) Base URL of the HIOK API, e.g. https://hiokcloud.com. Can be set with HIOK_ENDPOINT.
 - `password` (String, Sensitive) Account password, used to obtain a token when none is set. Can be set with HIOK_PASSWORD.
-- `regions` (List of String) Default regions for resources that do not set their own. Defaults to ["south-india"].
+- `regions` (List of String) Default region for resources that do not set their own (the first entry is used). Defaults to the first available region reported by the API, e.g. "canada".
 - `token` (String, Sensitive) API token. Takes precedence over email/password. Can be set with HIOK_TOKEN.

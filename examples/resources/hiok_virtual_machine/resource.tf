@@ -1,7 +1,7 @@
 resource "hiok_virtual_machine" "example" {
   name             = "web-01"
-  region           = "south-india"
-  image            = "ubuntu-24.04"
+  region           = "canada"
+  image            = "ubuntu-24.04-amd64"
   vcpu_count       = 2
   ram_gb           = 4
   network_name     = "app-net"
