@@ -230,7 +230,7 @@ resource "hiok_storage_account" "assets" {
 `
 	noReplace := []plancheck.PlanCheck{
 		plancheck.ExpectResourceAction("hiok_virtual_machine.web", plancheck.ResourceActionUpdate),
-		plancheck.ExpectResourceAction("hiok_virtual_network.app", plancheck.ResourceActionNoop),
+		plancheck.ExpectResourceAction("hiok_virtual_network.app", plancheck.ResourceActionUpdate),
 		plancheck.ExpectResourceAction("hiok_container.api", plancheck.ResourceActionUpdate),
 		plancheck.ExpectResourceAction("hiok_storage_account.assets", plancheck.ResourceActionUpdate),
 	}
@@ -246,6 +246,15 @@ resource "hiok_storage_account" "assets" {
 					resource.TestCheckResourceAttr("hiok_virtual_machine.web", "imported", "false"),
 					resource.TestCheckResourceAttr("hiok_virtual_network.app", "address_space", "10.20.0.0/16"),
 				),
+			},
+			// The flag is cleared even where nothing needed recording, so adding a
+			// subnet to the imported network later is a real (replacing) change.
+			{
+				Config: regexp.MustCompile(`address_space = "10.20.0.0/16"\n`).ReplaceAllString(config,
+					"address_space = \"10.20.0.0/16\"\n  subnet_name   = \"web\"\n  subnet_cidr   = \"10.20.1.0/24\"\n"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("hiok_virtual_network.app", plancheck.ResourceActionReplace),
+				}},
 			},
 			// After the values are recorded, changing one forces replacement again.
 			{

@@ -119,21 +119,22 @@ func createTimeOnly(keys ...string) schema.CustomizeDiffFunc {
 			return nil
 		}
 		imported := d.Get("imported").(bool)
-		recording := false
 		for _, k := range keys {
 			if !d.HasChange(k) {
 				continue
 			}
 			old, _ := d.GetChange(k)
 			if imported && isZero(old) {
-				recording = true
-				continue
+				continue // recorded in place by the update
 			}
 			if err := d.ForceNew(k); err != nil {
 				return err
 			}
 		}
-		if recording {
+		// Clear the flag on the first apply after import even when there is
+		// nothing to record; otherwise a later real change to a still-empty
+		// attribute would be recorded silently instead of replacing.
+		if imported {
 			return d.SetNew("imported", false)
 		}
 		return nil
