@@ -21,11 +21,13 @@ type Client struct {
 	Endpoint string
 	Regions  []string
 
-	mu       sync.Mutex
-	token    string
-	email    string
-	password string
-	http     *http.Client
+	mu           sync.Mutex
+	token        string
+	email        string
+	password     string
+	clientID     string
+	clientSecret string
+	http         *http.Client
 
 	// RetryWait is the base delay between retries of transient failures.
 	RetryWait time.Duration
@@ -130,8 +132,18 @@ func IsTransient(err error) bool {
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
+// Option adjusts a Client built by New.
+type Option func(*Client)
+
+// WithServicePrincipal signs in with a service principal's client ID and secret
+// (POST /api/OAuth/token/client) — the credential for CI/CD pipelines. Its token
+// lasts an hour and is renewed on the first 401 after that.
+func WithServicePrincipal(clientID, clientSecret string) Option {
+	return func(c *Client) { c.clientID, c.clientSecret = clientID, clientSecret }
+}
+
 // New signs in when no token is supplied, otherwise uses the token as-is.
-func New(endpoint, token, email, password string, regions []string) (*Client, error) {
+func New(endpoint, token, email, password string, regions []string, opts ...Option) (*Client, error) {
 	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
 	if endpoint == "" {
 		return nil, fmt.Errorf("endpoint must be configured (or set HIOK_ENDPOINT), e.g. https://hiokcloud.com")
@@ -150,10 +162,13 @@ func New(endpoint, token, email, password string, regions []string) (*Client, er
 		http:      &http.Client{Timeout: 5 * time.Minute},
 		RetryWait: DefaultRetryWait,
 	}
+	for _, o := range opts {
+		o(c)
+	}
 
 	if c.token == "" {
-		if email == "" || password == "" {
-			return nil, fmt.Errorf("either token, or email and password, must be configured")
+		if !c.canRelogin() {
+			return nil, fmt.Errorf("configure client_id and client_secret (a service principal), a token, or email and password")
 		}
 		if err := c.login(context.Background()); err != nil {
 			return nil, err
@@ -169,7 +184,7 @@ func (c *Client) currentToken() string {
 }
 
 func (c *Client) canRelogin() bool {
-	return c.email != "" && c.password != ""
+	return (c.clientID != "" && c.clientSecret != "") || (c.email != "" && c.password != "")
 }
 
 // login signs in, retrying for about two minutes while the API is
@@ -191,8 +206,13 @@ func (c *Client) login(ctx context.Context) error {
 }
 
 func (c *Client) loginOnce(ctx context.Context) (int, error) {
+	path := "/api/OAuth/token"
 	body, _ := json.Marshal(map[string]string{"email": c.email, "password": c.password})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint+"/api/OAuth/token", bytes.NewReader(body))
+	if c.clientID != "" && c.clientSecret != "" {
+		path = "/api/OAuth/token/client"
+		body, _ = json.Marshal(map[string]string{"clientId": c.clientID, "clientSecret": c.clientSecret})
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint+path, bytes.NewReader(body))
 	if err != nil {
 		return -1, err
 	}

@@ -39,6 +39,19 @@ func New() *schema.Provider {
 				DefaultFunc: schema.EnvDefaultFunc("HIOK_PASSWORD", nil),
 				Description: "Account password, used to obtain a token when none is set. Can be set with HIOK_PASSWORD.",
 			},
+			"client_id": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("HIOK_CLIENT_ID", nil),
+				Description: "Service principal client ID (console: Identity → Service principals) — the credential for CI/CD. Can be set with HIOK_CLIENT_ID.",
+			},
+			"client_secret": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Sensitive:   true,
+				DefaultFunc: schema.EnvDefaultFunc("HIOK_CLIENT_SECRET", nil),
+				Description: "Service principal client secret. Can be set with HIOK_CLIENT_SECRET.",
+			},
 			"regions": {
 				Type:        schema.TypeList,
 				Optional:    true,
@@ -157,6 +170,7 @@ func configure(_ context.Context, d *schema.ResourceData) (any, diag.Diagnostics
 		d.Get("email").(string),
 		d.Get("password").(string),
 		regions,
+		client.WithServicePrincipal(d.Get("client_id").(string), d.Get("client_secret").(string)),
 	)
 	if err != nil {
 		return nil, diag.FromErr(err)

@@ -1,6 +1,6 @@
 // Package mockapi is an in-memory stand-in for the HIOK REST API. Its request
 // and response shapes, status codes and quirks were recorded from the live
-// test deployment (test.hiokcloud.com) and its OpenAPI document. It backs the
+// live deployment (hiokcloud.com) and its OpenAPI document. It backs the
 // provider's tests and `make demo`; it is not a specification of the API.
 package mockapi
 
@@ -150,6 +150,19 @@ func (s *Server) Handler() http.Handler {
 			s.outage--
 			w.WriteHeader(502)
 			_, _ = io.WriteString(w, "Error 502: Bad gateway")
+			return
+		}
+
+		if r.URL.Path == "/api/OAuth/token/client" {
+			var p struct{ ClientID, ClientSecret string }
+			_ = json.Unmarshal(raw, &p)
+			if p.ClientID != "11111111-2222-3333-4444-555555555555" || p.ClientSecret != "sp-secret" {
+				writeJSON(w, 401, map[string]any{"message": "Invalid client credentials", "data": "Invalid client credentials"})
+				return
+			}
+			s.token++
+			writeJSON(w, 200, map[string]any{"message": "Token Generated Successfully",
+				"data": map[string]any{"success": true, "message": "Login Successful", "token": "sp-tok-" + strconv.Itoa(s.token)}})
 			return
 		}
 
@@ -415,7 +428,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, raw []byte) {
 			Fields: map[string]any{"displayName": in.DisplayName, "status": "active", "primaryRegion": in.PrimaryRegion,
 				"storageTier": in.StorageTier, "redundancy": in.Redundancy, "quotaBytes": 10737418240,
 				"consistencyMode": in.Consistency, "writeAcknowledgement": in.WriteAck}}
-		it.Fields["primaryEndpoint"] = "https://test.hiokcloud.com/api/StorageAccount/" + it.ID
+		it.Fields["primaryEndpoint"] = "https://hiokcloud.com/api/StorageAccount/" + it.ID
 		s.store["sa"][in.Name] = it
 		writeJSON(w, 200, map[string]any{"message": "Storage account created successfully", "data": merge(it.Fields, map[string]any{"id": it.ID, "name": it.Name})})
 	case p == "/api/StorageAccount" && r.Method == http.MethodGet:

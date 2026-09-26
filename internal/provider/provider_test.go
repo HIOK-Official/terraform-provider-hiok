@@ -777,3 +777,57 @@ resource "hiok_virtual_machine" "v" {
 		},
 	})
 }
+
+// A pipeline signs in with a service principal (client_id / client_secret), with no
+// email or password anywhere, and renews its token when the API says it expired.
+func TestServicePrincipal_SignsInAndRenews(t *testing.T) {
+	m := startMock(t, mockapi.Options{ExpireTokenAfter: 3})
+	t.Setenv("HIOK_EMAIL", "")
+	t.Setenv("HIOK_PASSWORD", "")
+	t.Setenv("HIOK_CLIENT_ID", "11111111-2222-3333-4444-555555555555")
+	t.Setenv("HIOK_CLIENT_SECRET", "sp-secret")
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		CheckDestroy:             checkAllGone(m),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "hiok" {}
+resource "hiok_storage_account" "s" {
+  name = "splogs"
+}`,
+			Check: func(*terraform.State) error {
+				var sp, password int
+				for _, line := range m.Log() {
+					switch {
+					case strings.HasPrefix(line, "POST /api/OAuth/token/client"):
+						sp++
+					case strings.HasPrefix(line, "POST /api/OAuth/token "):
+						password++
+					}
+				}
+				if sp < 2 || password != 0 {
+					return fmt.Errorf("want service-principal sign-ins (incl. a renewal) and no password sign-in; got %d and %d", sp, password)
+				}
+				return nil
+			},
+		}},
+	})
+}
+
+func TestServicePrincipal_WrongSecretIsRefused(t *testing.T) {
+	startMock(t, mockapi.Options{})
+	t.Setenv("HIOK_EMAIL", "")
+	t.Setenv("HIOK_PASSWORD", "")
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: `
+provider "hiok" {
+  client_id     = "11111111-2222-3333-4444-555555555555"
+  client_secret = "wrong"
+}
+resource "hiok_storage_account" "s" { name = "nope" }`,
+			ExpectError: regexp.MustCompile(`Invalid client credentials`),
+		}},
+	})
+}

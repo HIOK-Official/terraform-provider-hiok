@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- Service principals: `client_id` and `client_secret` (or `HIOK_CLIENT_ID` /
+  `HIOK_CLIENT_SECRET`) sign the provider in without anyone's password — the
+  credential for CI/CD. The one-hour token is renewed automatically.
+
 ## 0.2.0
 
 The whole platform as code: 60 resources and 12 data sources, verified end to end

@@ -4,7 +4,7 @@ Manage HIOK virtual machines, virtual networks, container instances, and storage
 
 ## Status
 
-The provider is in public preview (`0.1.x`) and needs Terraform 1.5 or later. It is tested end to end against the live HIOK test deployment.
+The provider is published on the Terraform Registry as `HIOK-Official/hiok` and needs Terraform 1.5 or later. It is tested end to end against the live HIOK deployment.
 
 Changed in place (no replacement): a VM's `power_state`, a storage account's `tier`, `redundancy` and `display_name`, and a network's `subnet_name`/`subnet_cidr`. The HIOK API has no update operation for anything else, so **changing any other setting replaces the resource**. For a virtual machine that means its disk is deleted too. Read the plan before you apply, and consider `lifecycle { prevent_destroy = true }` on anything that holds data.
 
@@ -36,7 +36,7 @@ make install
 The endpoint is required. Use a token (recommended for automation):
 
 ```bash
-export HIOK_ENDPOINT="https://hiokcloud.com"      # or https://test.hiokcloud.com
+export HIOK_ENDPOINT="https://hiokcloud.com"      # or https://hiokcloud.com
 export HIOK_TOKEN="..."
 ```
 
@@ -83,7 +83,7 @@ A complete configuration is in [`examples/main.tf`](examples/main.tf). Full refe
 | `hiok_container` | name |
 | `hiok_storage_account` | name |
 
-Values accepted by the live API (checked against test.hiokcloud.com):
+Values accepted by the live API (checked against hiokcloud.com):
 
 - `region`: IDs from `data.hiok_regions.x.available_ids` (currently `canada`). When unset, the provider uses the first available region.
 - `image`: IDs from `data.hiok_vm_images.x.ids`, e.g. `ubuntu-24.04-amd64`, `ubuntu-22.04-amd64`, `debian-12-amd64`.
@@ -128,7 +128,7 @@ cd examples && terraform init && terraform apply && terraform destroy
 Acceptance tests against a real deployment (creates and then destroys real, billable resources named `tf-acc-*`):
 
 ```bash
-export HIOK_ENDPOINT=https://test.hiokcloud.com HIOK_EMAIL=... HIOK_PASSWORD=...
+export HIOK_ENDPOINT=https://hiokcloud.com HIOK_EMAIL=... HIOK_PASSWORD=...
 make testacc
 ```
 

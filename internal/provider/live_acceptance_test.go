@@ -20,7 +20,7 @@ import (
 // runs with TF_ACC=1 and HIOK_ENDPOINT plus credentials, and it creates real
 // (billable) resources named tf-acc-<random>:
 //
-//	TF_ACC=1 HIOK_ENDPOINT=https://test.hiokcloud.com HIOK_EMAIL=... HIOK_PASSWORD=... \
+//	TF_ACC=1 HIOK_ENDPOINT=https://hiokcloud.com HIOK_EMAIL=... HIOK_PASSWORD=... \
 //	  go test ./internal/provider -run TestAccLive -v -timeout 60m
 //
 // HIOK_ACC_REGION and HIOK_ACC_IMAGE override the region and VM image.

@@ -24,6 +24,8 @@ provider "hiok" {
 
 ### Optional
 
+- `client_id` (String) Service principal client ID (console: Identity → Service principals) — the credential for CI/CD. Can be set with HIOK_CLIENT_ID.
+- `client_secret` (String, Sensitive) Service principal client secret. Can be set with HIOK_CLIENT_SECRET.
 - `email` (String) Account email, used to obtain a token when none is set. Can be set with HIOK_EMAIL.
 - `endpoint` (String) Base URL of the HIOK API, e.g. https://hiokcloud.com. Can be set with HIOK_ENDPOINT.
 - `password` (String, Sensitive) Account password, used to obtain a token when none is set. Can be set with HIOK_PASSWORD.

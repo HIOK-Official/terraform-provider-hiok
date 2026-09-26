@@ -10,7 +10,7 @@ terraform {
 
 # Endpoint and credentials come from the environment so nothing sensitive
 # (and no environment-specific URL) lives in the configuration:
-#   export HIOK_ENDPOINT="https://test.hiokcloud.com"
+#   export HIOK_ENDPOINT="https://hiokcloud.com"
 #   export HIOK_EMAIL="you@example.com" HIOK_PASSWORD="..."   # or HIOK_TOKEN
 provider "hiok" {
   regions = [var.region]
