@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- `hiok_integration`: `jira_issue_type` no longer defaults to "Task" on Slack and
+  webhook integrations, which showed as a change on the first plan after an import.
+
 ## 0.4.0
 
 - New resource `hiok_integration`: Slack channels, Jira projects and webhooks that

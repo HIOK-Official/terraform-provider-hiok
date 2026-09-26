@@ -64,8 +64,8 @@ func resourceIntegration() *schema.Resource {
 			"jira_project_key": {Type: schema.TypeString, Optional: true,
 				ValidateFunc: validation.StringMatch(jiraKey, "a Jira project key in capitals, e.g. OPS"),
 				Description:  "Project issues are opened in. Required for kind = jira."},
-			"jira_issue_type": {Type: schema.TypeString, Optional: true, Default: "Task",
-				Description: "Issue type opened for a firing alert."},
+			"jira_issue_type": {Type: schema.TypeString, Optional: true,
+				Description: "Issue type opened for a firing alert. Defaults to Task."},
 			"jira_api_token": {Type: schema.TypeString, Optional: true, Sensitive: true,
 				Description: "Atlassian API token (id.atlassian.com → Security → API tokens). Required for kind = jira."},
 
@@ -149,7 +149,7 @@ func integrationPayload(d *schema.ResourceData, creating bool) map[string]any {
 			"site":       strings.TrimRight(d.Get("jira_site").(string), "/"),
 			"email":      d.Get("jira_email").(string),
 			"projectKey": d.Get("jira_project_key").(string),
-			"issueType":  d.Get("jira_issue_type").(string),
+			"issueType":  d.Get("jira_issue_type").(string), // the API makes "" a Task
 		}
 	case "webhook":
 		body["config"] = map[string]any{"url": d.Get("webhook_url").(string)}
