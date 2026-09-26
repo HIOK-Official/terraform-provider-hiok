@@ -55,7 +55,7 @@ resource "hiok_integration" "pager" {
 - `events` (List of String) Events delivered: alert.fired, alert.resolved, job.failed. Defaults to all three.
 - `jira_api_token` (String, Sensitive) Atlassian API token (id.atlassian.com → Security → API tokens). Required for kind = jira.
 - `jira_email` (String) The Atlassian account the API token belongs to. Required for kind = jira.
-- `jira_issue_type` (String) Issue type opened for a firing alert.
+- `jira_issue_type` (String) Issue type opened for a firing alert. Defaults to Task.
 - `jira_project_key` (String) Project issues are opened in. Required for kind = jira.
 - `jira_site` (String) Jira Cloud site, e.g. https://your-site.atlassian.net. Required for kind = jira.
 - `slack_channel` (String) Channel name, for display only; the webhook decides where messages go.
