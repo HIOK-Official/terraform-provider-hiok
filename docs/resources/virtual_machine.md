@@ -40,16 +40,23 @@ resource "hiok_virtual_machine" "example" {
 
 ### Optional
 
+- `auth_type` (String) ssh (default) or password.
 - `disk_size_gb` (Number) Root disk size in GiB. Defaults to the platform's size for the image.
+- `gateway` (String)
 - `generate_ssh_key` (Boolean) Generate an ed25519 keypair for the cloud-init user. The private key is returned in `private_key_openssh` (stored in Terraform state, so protect your state).
 - `image` (String) Base image ID, as listed in `hiok_vm_images.ids` (e.g. `ubuntu-24.04-amd64`, `debian-12-amd64`).
+- `mac_address` (String)
 - `network_name` (String) Virtual network to attach to, usually a `hiok_virtual_network` name.
+- `ovs_bridge_name` (String)
 - `password` (String, Sensitive) Password for the cloud-init user (password authentication). Prefer SSH keys.
 - `power_state` (String) Desired power state, `running` or `stopped`. Changed in place (start/stop), without replacing the VM.
 - `ram_gb` (Number) Memory in GiB.
 - `region` (String) Region to deploy into, e.g. `canada`. Defaults to the provider's region.
 - `ssh_public_key` (String) Public key authorised for the cloud-init user.
+- `subnet_ip` (String) Static address in the subnet.
+- `subnet_mask` (String)
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
+- `use_ovs_bridge` (Boolean)
 - `username` (String) cloud-init user created on first boot.
 - `vcpu_count` (Number) Virtual CPUs.
 
@@ -77,6 +84,8 @@ Optional:
 ## Import
 
 Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
 terraform import hiok_virtual_machine.example <name>

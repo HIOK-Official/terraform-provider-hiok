@@ -97,6 +97,9 @@ func containerCreate(ctx context.Context, d *schema.ResourceData, meta any) diag
 		"name":  name,
 		"image": d.Get("image").(string),
 	}
+	if err := mergeExtras(d, payload, "hiok_container"); err != nil {
+		return diag.FromErr(err)
+	}
 	if r, ok := d.GetOk("region"); ok {
 		if err := c.CheckRegion(ctx, r.(string)); err != nil {
 			return diag.FromErr(err)

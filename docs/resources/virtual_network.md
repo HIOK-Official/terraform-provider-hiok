@@ -31,6 +31,8 @@ resource "hiok_virtual_network" "example" {
 
 ### Optional
 
+- `bridge_name` (String) Bridge name on the host (default: derived from the name).
+- `forward_mode` (String) nat, route or isolated.
 - `region` (String) Region to create the network in, e.g. `canada`. Defaults to the provider's region.
 - `subnet_cidr` (String) IPv4 CIDR of the subnet; must sit inside address_space. Changed in place.
 - `subnet_name` (String) Name of the network's subnet. Without it the platform creates a subnet named `default` spanning the whole address space. Changed in place.
@@ -54,6 +56,8 @@ Optional:
 ## Import
 
 Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
 terraform import hiok_virtual_network.example <name>

@@ -222,6 +222,9 @@ func vmCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagno
 		"ramSize":        d.Get("ram_gb").(float64),
 		"networkName":    d.Get("network_name").(string),
 	}
+	if err := mergeExtras(d, payload, "hiok_virtual_machine"); err != nil {
+		return diag.FromErr(err)
+	}
 	if v, ok := d.GetOk("disk_size_gb"); ok {
 		payload["diskSizeGb"] = v.(int)
 	}

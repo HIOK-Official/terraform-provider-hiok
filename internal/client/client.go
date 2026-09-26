@@ -478,3 +478,26 @@ func VisibleName(name string) string {
 	}
 	return strings.TrimPrefix(name, "/")
 }
+
+// DoRaw returns a GET response body untouched, for endpoints that answer with a file
+// rather than JSON — a VPN client profile, for example. Retried like any read.
+func (c *Client) DoRaw(method, path string) ([]byte, error) {
+	ctx := context.Background()
+	var lastErr error
+	for attempt := 1; attempt <= 4; attempt++ {
+		status, raw, err := c.send(ctx, method, path, nil)
+		switch {
+		case err != nil:
+			lastErr = fmt.Errorf("%s %s: %w", method, path, err)
+		case status < 200 || status > 299:
+			lastErr = &APIError{Method: method, Path: path, StatusCode: status, Message: messageFrom(raw)}
+			if !transientStatus(status) {
+				return nil, lastErr
+			}
+		default:
+			return raw, nil
+		}
+		time.Sleep(c.RetryWait * time.Duration(attempt))
+	}
+	return nil, lastErr
+}

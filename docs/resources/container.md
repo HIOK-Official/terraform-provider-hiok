@@ -32,10 +32,24 @@ resource "hiok_container" "example" {
 ### Optional
 
 - `command` (List of String) Override the image entrypoint command.
+- `cpus` (Number) CPU limit, e.g. 0.5.
+- `domainname` (String) Domain name inside the container.
+- `entrypoint` (List of String) Overrides the image's entrypoint.
 - `env` (List of String) Environment variables as "KEY=value" strings.
 - `hostname` (String) Hostname inside the container.
+- `labels` (Map of String) Container labels.
+- `memory_bytes` (Number) Memory limit in bytes.
+- `network_mode` (String) bridge (default) or none.
+- `networks` (List of String) Networks to join.
+- `ports` (String) Published ports: jsonencode([{hostPort = 8080, containerPort = 80, protocol = "tcp"}]).
 - `region` (String) Region to deploy into. When unset the platform places the container.
+- `restart_policy` (String) no, on-failure, always or unless-stopped (default).
+- `stop_signal` (String) Signal sent to stop the container (default SIGTERM).
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
+- `tty` (Boolean) Allocate a terminal.
+- `user` (String) User the process runs as, e.g. "101:101".
+- `volumes` (String) Mounts: jsonencode([{type = "storage", source = "<account>/<folder>", destination = "/data", readOnly = false}]) — type volume, storage or tmpfs.
+- `working_dir` (String) Working directory of the process.
 
 ### Read-Only
 
@@ -56,6 +70,8 @@ Optional:
 ## Import
 
 Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
 terraform import hiok_container.example <name>

@@ -1,1 +1,2 @@
-terraform import hiok_storage_account.example <name>
+# By name or by id (the account GUID).
+terraform import hiok_storage_account.example assets

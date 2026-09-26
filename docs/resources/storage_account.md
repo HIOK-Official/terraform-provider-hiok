@@ -3,12 +3,12 @@
 page_title: "hiok_storage_account Resource - hiok"
 subcategory: ""
 description: |-
-  A storage account. Changing any setting other than timeouts replaces the account and its data.
+  A storage account: blob containers, file shares, filesystems, queues and tables, replicated to the regions you choose. Its id is the account's GUID, which child resources (hiok_storage_container, hiok_storage_queue, …) take as account_id.
 ---
 
 # hiok_storage_account (Resource)
 
-A storage account. Changing any setting other than `timeouts` replaces the account and its data.
+A storage account: blob containers, file shares, filesystems, queues and tables, replicated to the regions you choose. Its id is the account's GUID, which child resources (hiok_storage_container, hiok_storage_queue, …) take as account_id.
 
 ## Example Usage
 
@@ -25,37 +25,39 @@ resource "hiok_storage_account" "example" {
 
 ### Required
 
-- `name` (String) Storage account name.
+- `name` (String) 3-24 lowercase letters and digits.
 
 ### Optional
 
-- `display_name` (String) Friendly name shown in the console. Defaults to `name`. Changed in place.
-- `redundancy` (String) Redundancy: `LRS`, `ZRS`, `GRS` or `RA-GRS`. Changed in place.
-- `region` (String) Primary region, e.g. `canada`. Defaults to the provider's region.
-- `tier` (String) Access tier: `hot`, `cool`, `cold` or `archive`. Changed in place.
-- `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
+- `consistency_mode` (String) strong, bounded, session (default) or eventual.
+- `description` (String)
+- `display_name` (String)
+- `max_staleness_ms` (Number) For bounded consistency.
+- `preferred_read_region` (String) auto (default) or a region id.
+- `quota_bytes` (Number) Capacity limit in bytes (default 10 GiB).
+- `redundancy` (String) LRS (default), ZRS or GRS.
+- `region` (String) Primary region (default: the provider's first region).
+- `replica_regions` (List of String) Regions holding a replica.
+- `resource_group_id` (String) Resource group the resource is placed in.
+- `subscription_id` (String) Subscription the resource is billed to.
+- `tier` (String) hot (default), cool or archive.
+- `write_acknowledgement` (String) primary, quorum (default) or all.
 
 ### Read-Only
 
-- `account_id` (String) Platform ID of the account (used by the API for most operations).
+- `account_id` (String) The account's GUID (same as id; kept for configurations written for 0.1).
 - `id` (String) The ID of this resource.
-- `imported` (Boolean) True when the resource was adopted with `terraform import` and its create-time settings have not been recorded yet. The next apply records them without calling the API.
-- `primary_endpoint` (String) API endpoint of the account.
-- `quota_bytes` (Number) Storage quota in bytes.
-- `status` (String) Provisioning state, e.g. `active`.
-
-<a id="nestedblock--timeouts"></a>
-### Nested Schema for `timeouts`
-
-Optional:
-
-- `create` (String)
-- `delete` (String)
+- `primary_endpoint` (String) The account's data-plane URL.
+- `status` (String) Provisioning state.
+- `used_bytes` (Number)
 
 ## Import
 
 Import is supported using the following syntax:
 
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
 ```shell
-terraform import hiok_storage_account.example <name>
+# By name or by id (the account GUID).
+terraform import hiok_storage_account.example assets
 ```

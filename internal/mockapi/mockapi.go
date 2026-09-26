@@ -388,6 +388,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, raw []byte) {
 			PrimaryRegion string `json:"primaryRegion"`
 			StorageTier   string `json:"storageTier"`
 			Redundancy    string `json:"redundancy"`
+			Consistency   string `json:"consistencyMode"`
+			WriteAck      string `json:"writeAcknowledgement"`
 		}
 		_ = json.Unmarshal(raw, &in)
 		fail := func(msg string) {
@@ -408,9 +410,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, raw []byte) {
 			fail("Invalid primary region: " + in.PrimaryRegion)
 			return
 		}
-		it := &item{ID: s.newID(), Name: in.Name, hidden: s.opt.HiddenReads, deleting: -1,
+		// Storage accounts are rows in the database: the list is never stale.
+		it := &item{ID: s.newID(), Name: in.Name, deleting: -1,
 			Fields: map[string]any{"displayName": in.DisplayName, "status": "active", "primaryRegion": in.PrimaryRegion,
-				"storageTier": in.StorageTier, "redundancy": in.Redundancy, "quotaBytes": 10737418240}}
+				"storageTier": in.StorageTier, "redundancy": in.Redundancy, "quotaBytes": 10737418240,
+				"consistencyMode": in.Consistency, "writeAcknowledgement": in.WriteAck}}
 		it.Fields["primaryEndpoint"] = "https://test.hiokcloud.com/api/StorageAccount/" + it.ID
 		s.store["sa"][in.Name] = it
 		writeJSON(w, 200, map[string]any{"message": "Storage account created successfully", "data": merge(it.Fields, map[string]any{"id": it.ID, "name": it.Name})})
@@ -418,6 +422,20 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, raw []byte) {
 		s.list(w, "sa", "Storage accounts retrieved successfully", func(it *item) map[string]any {
 			return merge(it.Fields, map[string]any{"name": it.Name, "id": it.ID})
 		})
+	case strings.HasPrefix(p, "/api/StorageAccount/") && r.Method == http.MethodGet:
+		// Like the real API, a deleted account is still answered, marked deleted.
+		id := strings.TrimPrefix(p, "/api/StorageAccount/")
+		for _, it := range s.store["sa"] {
+			if it.ID == id {
+				out := merge(it.Fields, map[string]any{"id": it.ID, "name": it.Name})
+				if it.deleting >= 0 {
+					out["status"] = "deleted"
+				}
+				writeJSON(w, 200, map[string]any{"message": "Storage account retrieved successfully", "data": out})
+				return
+			}
+		}
+		writeJSON(w, 404, map[string]any{"message": "Storage account not found"})
 	case strings.HasPrefix(p, "/api/StorageAccount/") && r.Method == http.MethodPut:
 		id := strings.TrimPrefix(p, "/api/StorageAccount/")
 		var in struct {

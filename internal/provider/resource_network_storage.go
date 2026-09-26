@@ -154,6 +154,9 @@ func vnetCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diag
 		"regions":      []string{region},
 		"forwardMode":  "nat",
 	}
+	if err := mergeExtras(d, payload, "hiok_virtual_network"); err != nil {
+		return diag.FromErr(err)
+	}
 	if err := c.Do(ctx, http.MethodPost, "/api/VirtualNetwork/create-vnet", payload, nil); err != nil {
 		return diag.FromErr(err)
 	}
@@ -244,41 +247,6 @@ var (
 	storageRedundancy = []string{"LRS", "ZRS", "GRS", "RA-GRS"}
 )
 
-func resourceStorageAccount() *schema.Resource {
-	return &schema.Resource{
-		Description:   "A storage account. Changing any setting other than `timeouts` replaces the account and its data.",
-		CreateContext: storageCreate,
-		ReadContext:   storageRead,
-		UpdateContext: storageUpdate,
-		DeleteContext: storageDelete,
-		Importer:      &schema.ResourceImporter{StateContext: importState},
-		CustomizeDiff: createTimeOnly("region"),
-
-		Timeouts: &schema.ResourceTimeout{
-			Create: schema.DefaultTimeout(10 * time.Minute),
-			Delete: schema.DefaultTimeout(10 * time.Minute),
-		},
-
-		Schema: map[string]*schema.Schema{
-			"name":         {Type: schema.TypeString, Required: true, ForceNew: true, ValidateFunc: validateName, Description: "Storage account name."},
-			"display_name": {Type: schema.TypeString, Optional: true, Computed: true, Description: "Friendly name shown in the console. Defaults to `name`. Changed in place."},
-			"region":       {Type: schema.TypeString, Optional: true, Computed: true, Description: "Primary region, e.g. `canada`. Defaults to the provider's region."},
-			"tier": {Type: schema.TypeString, Optional: true, Default: "hot",
-				ValidateFunc: validation.StringInSlice(storageTiers, false),
-				Description:  "Access tier: `hot`, `cool`, `cold` or `archive`. Changed in place."},
-			"redundancy": {Type: schema.TypeString, Optional: true, Default: "LRS",
-				ValidateFunc:     validation.StringInSlice(storageRedundancy, true),
-				DiffSuppressFunc: func(_, o, n string, _ *schema.ResourceData) bool { return strings.EqualFold(o, n) },
-				Description:      "Redundancy: `LRS`, `ZRS`, `GRS` or `RA-GRS`. Changed in place."},
-			"account_id":       {Type: schema.TypeString, Computed: true, Description: "Platform ID of the account (used by the API for most operations)."},
-			"primary_endpoint": {Type: schema.TypeString, Computed: true, Description: "API endpoint of the account."},
-			"quota_bytes":      {Type: schema.TypeInt, Computed: true, Description: "Storage quota in bytes."},
-			"status":           {Type: schema.TypeString, Computed: true, Description: "Provisioning state, e.g. `active`."},
-			"imported":         importedSchema(),
-		},
-	}
-}
-
 type storageInfo struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
@@ -309,123 +277,4 @@ func findStorage(ctx context.Context, c *client.Client, name string) (*storageIn
 func storageExists(ctx context.Context, c *client.Client, name string) (bool, error) {
 	s, err := findStorage(ctx, c, name)
 	return s != nil, err
-}
-
-func storageCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
-	c := meta.(*client.Client)
-	name := d.Get("name").(string)
-
-	region, err := resolveRegion(ctx, d, c)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	if existing, err := findStorage(ctx, c, name); err != nil {
-		return diag.FromErr(err)
-	} else if existing != nil {
-		return diag.Errorf("a storage account named %q already exists; import it with: terraform import <address> %s", name, name)
-	}
-
-	if err := c.Do(ctx, http.MethodPost, "/api/StorageAccount", storagePayload(d, name, region), nil); err != nil {
-		return diag.FromErr(err)
-	}
-	d.SetId(name)
-	_ = d.Set("imported", false)
-	_ = d.Set("region", region)
-
-	if err := waitForPresence(ctx, c, name, storageExists, true, d.Timeout(schema.TimeoutCreate)); err != nil {
-		return diag.FromErr(err)
-	}
-	return storageRead(ctx, d, meta)
-}
-
-func storagePayload(d *schema.ResourceData, name, region string) map[string]any {
-	displayName := name
-	if v, ok := d.GetOk("display_name"); ok {
-		displayName = v.(string)
-	}
-	return map[string]any{
-		"name":                 name,
-		"displayName":          displayName,
-		"primaryRegion":        region,
-		"preferredReadRegion":  region,
-		"replicaRegions":       []string{},
-		"storageTier":          d.Get("tier").(string),
-		"redundancy":           strings.ToUpper(d.Get("redundancy").(string)),
-		"consistencyMode":      "session",
-		"writeAcknowledgement": "quorum",
-	}
-}
-
-// storageUpdate applies tier, redundancy and display name changes with
-// PUT /api/StorageAccount/{id}; the account and its data are kept.
-func storageUpdate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
-	c := meta.(*client.Client)
-	if d.HasChanges("tier", "redundancy", "display_name") {
-		id := d.Get("account_id").(string)
-		if id == "" {
-			s, err := findStorage(ctx, c, d.Id())
-			if err != nil || s == nil {
-				return diag.Errorf("storage account %q not found for update: %v", d.Id(), err)
-			}
-			id = s.ID
-		}
-		if err := c.Do(ctx, http.MethodPut, "/api/StorageAccount/"+url.PathEscape(id), storagePayload(d, d.Id(), d.Get("region").(string)), nil); err != nil {
-			return diag.FromErr(err)
-		}
-	}
-	return recordOnly(storageRead)(ctx, d, meta)
-}
-
-func storageRead(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
-	c := meta.(*client.Client)
-	s, err := findStorage(ctx, c, d.Id())
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	if s == nil {
-		d.SetId("")
-		return nil
-	}
-	_ = d.Set("name", d.Id())
-	_ = d.Set("status", s.Status)
-	_ = d.Set("account_id", s.ID)
-	_ = d.Set("primary_endpoint", s.PrimaryEndpoint)
-	_ = d.Set("quota_bytes", s.QuotaBytes)
-	if s.PrimaryRegion != "" {
-		_ = d.Set("region", s.PrimaryRegion)
-	}
-	// Reported by the API, so changes made in the console show up as drift.
-	if s.StorageTier != "" {
-		_ = d.Set("tier", s.StorageTier)
-	}
-	if s.Redundancy != "" {
-		_ = d.Set("redundancy", s.Redundancy)
-	}
-	if s.DisplayName != "" {
-		_ = d.Set("display_name", s.DisplayName)
-	}
-	return nil
-}
-
-func storageDelete(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
-	c := meta.(*client.Client)
-	name := d.Id()
-
-	// DELETE /api/StorageAccount/{id} needs the account's UUID; the name is
-	// rejected with 400.
-	s, err := findStorage(ctx, c, name)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	if s != nil {
-		id := firstNonEmpty(s.ID, name)
-		if err := c.Do(ctx, http.MethodDelete, "/api/StorageAccount/"+url.PathEscape(id), nil, nil); err != nil && !client.IsNotFound(err) {
-			return diag.FromErr(err)
-		}
-	}
-	if err := waitForPresence(ctx, c, name, storageExists, false, d.Timeout(schema.TimeoutDelete)); err != nil {
-		return diag.FromErr(err)
-	}
-	d.SetId("")
-	return nil
 }

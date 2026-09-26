@@ -116,7 +116,9 @@ resource "hiok_storage_account" "t" {
 					resource.TestCheckResourceAttr("data.hiok_regions.all", "available_ids.0", region),
 					resource.TestCheckResourceAttr("hiok_virtual_network.t", "id", vnet),
 					resource.TestCheckResourceAttr("hiok_container.t", "id", ct),
-					resource.TestCheckResourceAttr("hiok_storage_account.t", "id", sa),
+					resource.TestCheckResourceAttr("hiok_storage_account.t", "name", sa),
+					resource.TestMatchResourceAttr("hiok_storage_account.t", "id", uuidRegexp),
+					resource.TestCheckResourceAttrPair("hiok_storage_account.t", "id", "hiok_storage_account.t", "account_id"),
 				),
 			},
 			{
