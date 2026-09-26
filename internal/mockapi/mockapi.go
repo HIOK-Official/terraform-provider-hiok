@@ -71,7 +71,8 @@ var Images = []map[string]any{
 
 // New returns a mock with the given options.
 func New(opt Options) *Server {
-	return &Server{opt: opt, store: map[string]map[string]*item{"vm": {}, "vnet": {}, "ct": {}, "sa": {}, "integration": {}}, subnets: map[string][]map[string]any{}}
+	return &Server{opt: opt, store: map[string]map[string]*item{"vm": {}, "vnet": {}, "ct": {}, "sa": {}, "integration": {},
+		"service-principals": {}, "apps": {}, "groups": {}, "users": {}}, subnets: map[string][]map[string]any{}}
 }
 
 // Log returns "METHOD /path?query body" for every request received.
@@ -481,6 +482,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, raw []byte) {
 		}
 		writeJSON(w, 404, map[string]any{"message": "Storage account not found"})
 
+	// ---- HIOK ID ----
+	case strings.HasPrefix(p, "/api/hiok-id/"):
+		s.hiokID(w, r, strings.TrimPrefix(p, "/api/hiok-id/"), raw)
+
 	// ---- integrations ----
 	case p == "/api/integrations" && r.Method == http.MethodGet:
 		out := []map[string]any{}
@@ -724,4 +729,132 @@ func (s *Server) Integrations() map[string]map[string]any {
 		out[id] = merge(it.Fields, map[string]any{"name": it.Name})
 	}
 	return out
+}
+
+// hiokID mirrors the HIOK ID collections: service principals and apps return a
+// secret once on create; groups carry members; users are invitations.
+func (s *Server) hiokID(w http.ResponseWriter, r *http.Request, rest string, raw []byte) {
+	parts := strings.Split(rest, "/")
+	coll := parts[0]
+	store, ok := s.store[coll]
+	if !ok {
+		writeJSON(w, 404, map[string]any{"message": "no route"})
+		return
+	}
+	var in map[string]any
+	_ = json.Unmarshal(raw, &in)
+	view := func(it *item) map[string]any {
+		out := merge(it.Fields, map[string]any{"id": it.ID, "name": it.Name})
+		delete(out, "clientSecret")
+		if coll == "service-principals" || coll == "apps" {
+			out["effectiveRole"] = out["role"]
+		}
+		if coll == "users" {
+			out["email"] = it.Name
+			out["effectiveRole"] = out["role"]
+		}
+		return out
+	}
+	switch {
+	case len(parts) == 1 && r.Method == http.MethodGet:
+		out := []map[string]any{}
+		for _, it := range store {
+			out = append(out, view(it))
+		}
+		writeJSON(w, 200, map[string]any{"data": out})
+	case len(parts) == 1 && r.Method == http.MethodPost:
+		name, _ := in["name"].(string)
+		if coll == "users" {
+			name, _ = in["email"].(string)
+		}
+		if name == "" {
+			writeJSON(w, 400, map[string]any{"message": "name is required"})
+			return
+		}
+		it := &item{ID: s.newID(), Name: name, Fields: map[string]any{}, deleting: -1}
+		for k, v := range in {
+			if k != "name" && k != "email" && k != "secretExpiresInDays" {
+				it.Fields[k] = v
+			}
+		}
+		if _, ok := it.Fields["enabled"]; !ok && coll != "groups" && coll != "users" {
+			it.Fields["enabled"] = true
+		}
+		answer := map[string]any{"id": it.ID}
+		switch coll {
+		case "service-principals", "apps":
+			it.Fields["clientId"] = s.newID()
+			it.Fields["tenantId"] = s.newID()
+			if it.Fields["role"] == nil {
+				it.Fields["role"] = "contributor"
+			}
+			answer["clientId"], answer["tenantId"] = it.Fields["clientId"], it.Fields["tenantId"]
+			answer["clientSecret"] = "hiok_sp_" + s.newID()
+			answer["secretExpiresAt"] = "2027-03-25T00:00:00Z"
+			if coll == "apps" {
+				it.Fields["signInAudience"] = firstStr(it.Fields["signInAudience"], "directory")
+			}
+		case "users":
+			it.Fields["status"] = "invited"
+			if it.Fields["role"] == nil {
+				it.Fields["role"] = "reader"
+			}
+		case "groups":
+			it.Fields["members"] = []any{}
+		}
+		store[it.ID] = it
+		writeJSON(w, 200, map[string]any{"message": "Created.", "data": answer})
+	case len(parts) >= 2:
+		it := store[parts[1]]
+		if it == nil {
+			writeJSON(w, 404, map[string]any{"message": "Not found"})
+			return
+		}
+		if len(parts) == 3 && parts[2] == "members" && r.Method == http.MethodPost {
+			members, _ := it.Fields["members"].([]any)
+			it.Fields["members"] = append(members, map[string]any{"kind": in["kind"], "ref": in["ref"]})
+			writeJSON(w, 200, map[string]any{"message": "Added."})
+			return
+		}
+		if len(parts) == 5 && parts[2] == "members" && r.Method == http.MethodDelete {
+			members, _ := it.Fields["members"].([]any)
+			kept := []any{}
+			for _, m := range members {
+				mm := m.(map[string]any)
+				if !(mm["kind"] == parts[3] && mm["ref"] == parts[4]) {
+					kept = append(kept, m)
+				}
+			}
+			it.Fields["members"] = kept
+			writeJSON(w, 200, map[string]any{"message": "Removed."})
+			return
+		}
+		switch r.Method {
+		case http.MethodPut:
+			for k, v := range in {
+				switch k {
+				case "name":
+					it.Name, _ = v.(string)
+				case "secretExpiresInDays", "email":
+				default:
+					it.Fields[k] = v
+				}
+			}
+			writeJSON(w, 200, map[string]any{"message": "Saved."})
+		case http.MethodDelete:
+			delete(store, it.ID)
+			writeJSON(w, 200, map[string]any{"message": "Deleted."})
+		default:
+			writeJSON(w, 405, map[string]any{"message": "method"})
+		}
+	default:
+		writeJSON(w, 404, map[string]any{"message": "no route"})
+	}
+}
+
+func firstStr(v any, def string) string {
+	if s, ok := v.(string); ok && s != "" {
+		return s
+	}
+	return def
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+HIOK ID as code:
+- `hiok_service_principal` — role, allowed IP ranges, on/off; client ID and secret
+  (the secret only from creation) for pipelines.
+- `hiok_app_registration` — "Sign in with HIOK" (OpenID Connect) for your own apps.
+- `hiok_id_group` — a role for everyone in it; `hiok_id_group_member` adds a person or
+  a service principal.
+- `hiok_id_member` — invite someone by email with a role.
+
 ## 0.4.1
 
 - `hiok_integration`: `jira_issue_type` no longer defaults to "Task" on Slack and

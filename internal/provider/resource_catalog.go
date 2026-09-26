@@ -232,6 +232,75 @@ func catalogResources() map[string]*schema.Resource {
 			},
 		},
 
+		// ── HIOK ID ─────────────────────────────────────────────────────────
+		"hiok_service_principal": {
+			Description: "A HIOK ID service principal: the identity a pipeline, script or Terraform signs in as " +
+				"(HIOK_CLIENT_ID / HIOK_CLIENT_SECRET), with its own role, optional IP limits and an expiring secret. " +
+				"The secret is only in state from creation.",
+			CreatePath: "/api/hiok-id/service-principals", ListPath: "/api/hiok-id/service-principals",
+			UpdateMethod: "PUT", UpdatePath: "/api/hiok-id/service-principals/{id}",
+			DeletePath: "/api/hiok-id/service-principals/{id}",
+			Fields: []restField{
+				reqStr("name", "name", ""),
+				str("description", "description", ""),
+				str("role", "role", "owner, contributor or reader.").withDefault("contributor"),
+				strList("allowed_cidrs", "allowedCidrs", "Addresses/CIDRs it may sign in from; empty = anywhere."),
+				boolean("enabled", "enabled", true, "A disabled principal cannot sign in; its live tokens stop within 30 seconds."),
+				{Attr: "secret_expires_in_days", JSON: "secretExpiresInDays", Kind: fInt, Optional: true, Default: 180,
+					WriteOnly: true, NoUpdate: true, Description: "Lifetime of the secret made with it (1–730 days)."},
+				computed("client_id", "clientId", fString, "HIOK_CLIENT_ID."),
+				computed("tenant_id", "tenantId", fString, ""),
+				computed("effective_role", "effectiveRole", fString, "Its role raised by any group it is in."),
+				{Attr: "client_secret", JSON: "clientSecret", Kind: fString, Computed: true, Sensitive: true,
+					Description: "HIOK_CLIENT_SECRET — shown once, at creation."},
+				computed("secret_expires_at", "secretExpiresAt", fString, ""),
+			},
+		},
+		"hiok_app_registration": {
+			Description: "An app that signs people in with their HIOK account (OpenID Connect, authorization code + PKCE). " +
+				"Issuer: <endpoint>/api/hiok-id/oidc. The secret is only in state from creation.",
+			CreatePath: "/api/hiok-id/apps", ListPath: "/api/hiok-id/apps",
+			UpdateMethod: "PUT", UpdatePath: "/api/hiok-id/apps/{id}",
+			DeletePath: "/api/hiok-id/apps/{id}",
+			Fields: []restField{
+				reqStr("name", "name", ""),
+				str("description", "description", ""),
+				strList("redirect_uris", "redirectUris", "Exact redirect URIs (https, or http://localhost).").required(),
+				str("homepage_url", "homepageUrl", ""),
+				str("sign_in_audience", "signInAudience", "directory (people in this account's HIOK ID) or any (every HIOK account).").withDefault("directory"),
+				boolean("enabled", "enabled", true, ""),
+				{Attr: "secret_expires_in_days", JSON: "secretExpiresInDays", Kind: fInt, Optional: true, Default: 365,
+					WriteOnly: true, NoUpdate: true, Description: "Lifetime of the client secret (1–730 days)."},
+				computed("client_id", "clientId", fString, ""),
+				{Attr: "client_secret", JSON: "clientSecret", Kind: fString, Computed: true, Sensitive: true,
+					Description: "Shown once, at creation."},
+			},
+		},
+		"hiok_id_group": {
+			Description: "A HIOK ID group: everyone in it (people and service principals) gets its role.",
+			CreatePath:  "/api/hiok-id/groups", ListPath: "/api/hiok-id/groups",
+			UpdateMethod: "PUT", UpdatePath: "/api/hiok-id/groups/{id}",
+			DeletePath: "/api/hiok-id/groups/{id}",
+			Fields: []restField{
+				reqStr("name", "name", ""),
+				str("description", "description", ""),
+				str("role", "role", "owner, contributor, reader, or empty for none."),
+			},
+		},
+		"hiok_id_member": {
+			Description: "Someone invited to work in this account with a role. They get an email and accept it " +
+				"after signing in; status shows invited, active or disabled.",
+			CreatePath: "/api/hiok-id/users", ListPath: "/api/hiok-id/users",
+			UpdateMethod: "PUT", UpdatePath: "/api/hiok-id/users/{id}",
+			DeletePath: "/api/hiok-id/users/{id}",
+			Fields: []restField{
+				reqStr("email", "email", "").forceNew(),
+				str("role", "role", "owner, contributor or reader.").withDefault("reader"),
+				computed("status", "status", fString, "invited, active or disabled."),
+				computed("effective_role", "effectiveRole", fString, ""),
+			},
+		},
+
 		// ── governance ──────────────────────────────────────────────────────
 		"hiok_resource_group": {
 			Description: "A resource group: a lifecycle container for resources.",

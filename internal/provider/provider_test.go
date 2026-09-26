@@ -938,3 +938,66 @@ resource "hiok_integration" "j" {
 		}},
 	})
 }
+
+func TestHiokID_Lifecycle(t *testing.T) {
+	startMock(t, mockapi.Options{})
+	cfg := func(role, cidr string) string {
+		return fmt.Sprintf(`
+provider "hiok" {}
+resource "hiok_service_principal" "ci" {
+  name          = "github-deploy"
+  role          = %q
+  allowed_cidrs = [%q]
+}
+resource "hiok_app_registration" "portal" {
+  name          = "Customer portal"
+  redirect_uris = ["https://portal.example.com/callback"]
+}
+resource "hiok_id_group" "ops" {
+  name = "Ops"
+  role = "contributor"
+}
+resource "hiok_id_member" "alice" {
+  email = "alice@example.com"
+  role  = "reader"
+}
+resource "hiok_id_group_member" "alice_ops" {
+  group_id = hiok_id_group.ops.id
+  member   = hiok_id_member.alice.email
+}
+resource "hiok_id_group_member" "ci_ops" {
+  group_id = hiok_id_group.ops.id
+  kind     = "serviceprincipal"
+  member   = hiok_service_principal.ci.client_id
+}`, role, cidr)
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg("reader", "203.0.113.0/24"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttrSet("hiok_service_principal.ci", "client_id"),
+					resource.TestMatchResourceAttr("hiok_service_principal.ci", "client_secret", regexp.MustCompile(`^hiok_sp_`)),
+					resource.TestCheckResourceAttr("hiok_app_registration.portal", "sign_in_audience", "directory"),
+					resource.TestMatchResourceAttr("hiok_app_registration.portal", "client_secret", regexp.MustCompile(`^hiok_sp_`)),
+					resource.TestCheckResourceAttr("hiok_id_member.alice", "status", "invited"),
+				),
+			},
+			{
+				// Role and IP limits change in place; the secret stays in state.
+				Config: cfg("contributor", "198.51.100.0/24"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("hiok_service_principal.ci", plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("hiok_service_principal.ci", "role", "contributor"),
+					resource.TestMatchResourceAttr("hiok_service_principal.ci", "client_secret", regexp.MustCompile(`^hiok_sp_`)),
+				),
+			},
+			{
+				ResourceName: "hiok_id_group.ops", ImportState: true, ImportStateVerify: true,
+			},
+		},
+	})
+}

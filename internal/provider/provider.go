@@ -118,6 +118,9 @@ func New() *schema.Provider {
 
 			// Where alerts and failed jobs are delivered.
 			"hiok_integration": resourceIntegration(),
+
+			// HIOK ID: group membership (the rest are on the REST engine).
+			"hiok_id_group_member": resourceIdGroupMember(),
 		},
 
 		DataSourcesMap: map[string]*schema.Resource{
