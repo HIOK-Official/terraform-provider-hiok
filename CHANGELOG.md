@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- New resource `hiok_integration`: Slack channels, Jira projects and webhooks that
+  receive alerts firing and recovering and Container Jobs failing. Each kind's secret
+  (Slack webhook URL, Jira API token, webhook signing secret) is write-only: sent on
+  create and when it changes, never read back, so an import keeps the one the API holds.
+
 ## 0.3.0
 
 - Service principals: `client_id` and `client_secret` (or `HIOK_CLIENT_ID` /

@@ -115,6 +115,9 @@ func New() *schema.Provider {
 			"hiok_stream_destination": resourceStreamDestination(),
 			"hiok_docker_stack":       resourceDockerStack(),
 			"hiok_swarm_service":      resourceSwarmService(),
+
+			// Where alerts and failed jobs are delivered.
+			"hiok_integration": resourceIntegration(),
 		},
 
 		DataSourcesMap: map[string]*schema.Resource{

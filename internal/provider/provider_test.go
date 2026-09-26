@@ -831,3 +831,110 @@ resource "hiok_storage_account" "s" { name = "nope" }`,
 		}},
 	})
 }
+
+func TestIntegration_Lifecycle(t *testing.T) {
+	m := startMock(t, mockapi.Options{})
+	secretOf := func(kind string) string {
+		for _, it := range m.Integrations() {
+			if it["kind"] == kind {
+				s, _ := it["secret"].(string)
+				return s
+			}
+		}
+		return ""
+	}
+	cfg := func(name, token string) string {
+		return fmt.Sprintf(`
+provider "hiok" {}
+resource "hiok_integration" "slack" {
+  kind              = "slack"
+  name              = "Slack #ops"
+  slack_webhook_url = "https://hooks.slack.com/services/T0/B0/xyz"
+  slack_channel     = "#ops"
+}
+resource "hiok_integration" "jira" {
+  kind             = "jira"
+  name             = %q
+  jira_site        = "https://acme.atlassian.net/"
+  jira_email       = "ops@example.com"
+  jira_project_key = "OPS"
+  jira_api_token   = %q
+  events           = ["alert.fired", "alert.resolved"]
+}
+resource "hiok_integration" "hook" {
+  kind           = "webhook"
+  name           = "Pager"
+  webhook_url    = "https://example.com/hiok"
+  webhook_secret = "s3cret"
+  enabled        = false
+}`, name, token)
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		CheckDestroy: func(*terraform.State) error {
+			if n := len(m.Integrations()); n > 0 {
+				return fmt.Errorf("destroy left %d integrations behind", n)
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: cfg("Jira OPS", "tok-1"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("hiok_integration.slack", "events.#", "3"),
+					resource.TestCheckResourceAttr("hiok_integration.slack", "has_secret", "true"),
+					resource.TestCheckResourceAttr("hiok_integration.jira", "jira_site", "https://acme.atlassian.net"),
+					resource.TestCheckResourceAttr("hiok_integration.jira", "jira_issue_type", "Task"),
+					resource.TestCheckResourceAttr("hiok_integration.jira", "events.#", "2"),
+					resource.TestCheckResourceAttr("hiok_integration.hook", "enabled", "false"),
+					func(*terraform.State) error {
+						if secretOf("jira") != "tok-1" || secretOf("webhook") != "s3cret" {
+							return fmt.Errorf("secrets not delivered to the API")
+						}
+						return nil
+					},
+				),
+			},
+			// Renaming updates in place and leaves the secret alone; a new token is sent.
+			{
+				Config: cfg("Jira incidents", "tok-2"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("hiok_integration.jira", plancheck.ResourceActionUpdate),
+					plancheck.ExpectResourceAction("hiok_integration.slack", plancheck.ResourceActionNoop),
+				}},
+				Check: func(*terraform.State) error {
+					if secretOf("jira") != "tok-2" || secretOf("slack") != "https://hooks.slack.com/services/T0/B0/xyz" {
+						return fmt.Errorf("secrets after update: jira=%q slack=%q", secretOf("jira"), secretOf("slack"))
+					}
+					return nil
+				},
+			},
+			{
+				ResourceName:            "hiok_integration.jira",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"jira_api_token"},
+			},
+		},
+	})
+}
+
+func TestIntegration_KindNeedsItsSettings(t *testing.T) {
+	startMock(t, mockapi.Options{})
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV5ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: `
+provider "hiok" {}
+resource "hiok_integration" "j" {
+  kind = "jira"
+  name = "no token"
+  jira_site        = "https://acme.atlassian.net"
+  jira_email       = "ops@example.com"
+  jira_project_key = "OPS"
+}`,
+			PlanOnly:    true,
+			ExpectError: regexp.MustCompile(`jira_api_token is required for kind = "jira"`),
+		}},
+	})
+}

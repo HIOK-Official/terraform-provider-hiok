@@ -71,7 +71,7 @@ var Images = []map[string]any{
 
 // New returns a mock with the given options.
 func New(opt Options) *Server {
-	return &Server{opt: opt, store: map[string]map[string]*item{"vm": {}, "vnet": {}, "ct": {}, "sa": {}}, subnets: map[string][]map[string]any{}}
+	return &Server{opt: opt, store: map[string]map[string]*item{"vm": {}, "vnet": {}, "ct": {}, "sa": {}, "integration": {}}, subnets: map[string][]map[string]any{}}
 }
 
 // Log returns "METHOD /path?query body" for every request received.
@@ -480,6 +480,42 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, raw []byte) {
 			}
 		}
 		writeJSON(w, 404, map[string]any{"message": "Storage account not found"})
+
+	// ---- integrations ----
+	case p == "/api/integrations" && r.Method == http.MethodGet:
+		out := []map[string]any{}
+		for _, it := range s.store["integration"] {
+			out = append(out, integrationView(it))
+		}
+		writeJSON(w, 200, map[string]any{"message": "Integrations", "data": out})
+	case p == "/api/integrations" && r.Method == http.MethodPost:
+		it := &item{ID: s.newID(), Fields: map[string]any{"enabled": true,
+			"events": []any{"alert.fired", "alert.resolved", "job.failed"}}, deleting: -1}
+		if msg := applyIntegration(it, raw, true); msg != "" {
+			writeJSON(w, 400, map[string]any{"message": msg})
+			return
+		}
+		s.store["integration"][it.ID] = it
+		writeJSON(w, 200, map[string]any{"message": "Integration created", "data": integrationView(it)})
+	case strings.HasPrefix(p, "/api/integrations/"):
+		it := s.store["integration"][strings.TrimPrefix(p, "/api/integrations/")]
+		if it == nil {
+			writeJSON(w, 404, map[string]any{"message": "Integration not found"})
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, 200, map[string]any{"data": integrationView(it)})
+		case http.MethodPut:
+			if msg := applyIntegration(it, raw, false); msg != "" {
+				writeJSON(w, 400, map[string]any{"message": msg})
+				return
+			}
+			writeJSON(w, 200, map[string]any{"message": "Integration updated", "data": integrationView(it)})
+		case http.MethodDelete:
+			delete(s.store["integration"], it.ID)
+			writeJSON(w, 200, map[string]any{"message": "Integration deleted"})
+		}
 	default:
 		writeJSON(w, 404, map[string]any{"message": fmt.Sprintf("no route for %s %s", r.Method, p)})
 	}
@@ -588,6 +624,104 @@ func merge(a, b map[string]any) map[string]any {
 	}
 	for k, v := range b {
 		out[k] = v
+	}
+	return out
+}
+
+// applyIntegration mirrors IntegrationsController.ApplyAsync: the kind never
+// changes, the secret is kept when omitted, and the config is normalised.
+func applyIntegration(it *item, raw []byte, creating bool) string {
+	var in struct {
+		Kind    string         `json:"kind"`
+		Name    *string        `json:"name"`
+		Config  map[string]any `json:"config"`
+		Secret  string         `json:"secret"`
+		Events  []string       `json:"events"`
+		Enabled *bool          `json:"enabled"`
+	}
+	_ = json.Unmarshal(raw, &in)
+	kind := in.Kind
+	if !creating {
+		kind = fmt.Sprint(it.Fields["kind"])
+	}
+	if kind != "slack" && kind != "jira" && kind != "webhook" {
+		return "kind must be slack, jira or webhook"
+	}
+	it.Fields["kind"] = kind
+	if in.Name != nil {
+		it.Name = *in.Name
+	}
+	if it.Name == "" {
+		return "name is required (up to 128 characters)"
+	}
+	if in.Events != nil {
+		events := make([]any, 0, len(in.Events))
+		for _, e := range in.Events {
+			events = append(events, e)
+		}
+		it.Fields["events"] = events
+	}
+	if in.Enabled != nil {
+		it.Fields["enabled"] = *in.Enabled
+	}
+	if in.Secret != "" {
+		it.Fields["secret"] = in.Secret
+	}
+	secret, _ := it.Fields["secret"].(string)
+	str := func(k string) string { v, _ := in.Config[k].(string); return strings.TrimSpace(v) }
+	switch kind {
+	case "slack":
+		if !strings.HasPrefix(secret, "https://hooks.slack.com/") {
+			return "a Slack incoming-webhook URL (https://hooks.slack.com/…) is required"
+		}
+		if in.Config != nil {
+			it.Fields["config"] = map[string]any{"channel": str("channel")}
+		}
+	case "jira":
+		if in.Config != nil {
+			site := strings.TrimRight(str("site"), "/")
+			if !strings.HasSuffix(site, ".atlassian.net") {
+				return "the Jira site must look like https://your-site.atlassian.net"
+			}
+			issueType := str("issueType")
+			if issueType == "" {
+				issueType = "Task"
+			}
+			it.Fields["config"] = map[string]any{"site": site, "email": str("email"),
+				"projectKey": strings.ToUpper(str("projectKey")), "issueType": issueType}
+		}
+		if secret == "" {
+			return "a Jira API token is required"
+		}
+	case "webhook":
+		if in.Config != nil {
+			if !strings.HasPrefix(str("url"), "https://") {
+				return "the webhook URL must be https"
+			}
+			it.Fields["config"] = map[string]any{"url": str("url")}
+		}
+	}
+	return ""
+}
+
+func integrationView(it *item) map[string]any {
+	secret, _ := it.Fields["secret"].(string)
+	config := it.Fields["config"]
+	if config == nil {
+		config = map[string]any{}
+	}
+	return map[string]any{"id": it.ID, "kind": it.Fields["kind"], "name": it.Name, "enabled": it.Fields["enabled"],
+		"events": it.Fields["events"], "config": config, "hasSecret": secret != "",
+		"lastStatus": nil, "lastDeliveryAt": nil, "createdAt": "2026-09-26T00:00:00Z"}
+}
+
+// Integrations returns the stored integrations by id, secrets included, for tests.
+func (s *Server) Integrations() map[string]map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]map[string]any{}
+	for id, it := range s.store["integration"] {
+		out[id] = merge(it.Fields, map[string]any{"name": it.Name})
 	}
 	return out
 }
